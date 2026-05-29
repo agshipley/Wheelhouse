@@ -3,6 +3,12 @@ import {
   Anchor, Plus, Trash2, ChevronDown, ChevronRight, Sparkles,
   SlidersHorizontal, RotateCcw, ExternalLink, AlertCircle, X, Search,
 } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 /* ============================================================
    WHEELHOUSE — Bar Acquisition Screener
@@ -58,27 +64,46 @@ const newId = () =>
     ? crypto.randomUUID()
     : "x" + Date.now() + Math.random().toString(36).slice(2);
 
-/* storage shim: prefers the Claude.ai artifact API, falls back to localStorage */
-const store = {
-  async get(key) {
-    if (typeof window !== "undefined" && typeof window.storage !== "undefined") {
-      return window.storage.get(key);
-    }
-    if (typeof localStorage !== "undefined") {
-      const v = localStorage.getItem(key);
-      return v ? { value: v } : null;
-    }
-    return null;
-  },
-  async set(key, value) {
-    if (typeof window !== "undefined" && typeof window.storage !== "undefined") {
-      return window.storage.set(key, value);
-    }
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(key, value);
-    }
-  },
-};
+/* ── Supabase row ↔ app object mapping ── */
+const oppToRow = (o, mode) => ({
+  id: o.id, mode,
+  name: o.name,
+  city: o.city ?? null,
+  asking: o.asking ?? null,
+  sqft: o.sqft ?? null,
+  capacity: o.capacity ?? null,
+  license_type: o.licenseType ?? "unknown",
+  rent_monthly: o.rentMonthly ?? null,
+  lease_years: o.leaseYears ?? null,
+  sde: o.sde ?? null,
+  revenue: o.revenue ?? null,
+  seller_financing: o.sellerFinancing ?? false,
+  concept_change: o.conceptChange ?? "light",
+  beach_proximity: o.beachProximity ?? "unknown",
+  kitchen: o.kitchen ?? null,
+  source_url: o.sourceUrl ?? null,
+  notes: o.notes ?? null,
+});
+
+const rowToOpp = (r) => normalizeOpp({
+  id: r.id,
+  name: r.name,
+  city: r.city,
+  asking: r.asking,
+  sqft: r.sqft,
+  capacity: r.capacity,
+  licenseType: r.license_type,
+  rentMonthly: r.rent_monthly,
+  leaseYears: r.lease_years,
+  sde: r.sde,
+  revenue: r.revenue,
+  sellerFinancing: r.seller_financing,
+  conceptChange: r.concept_change,
+  beachProximity: r.beach_proximity,
+  kitchen: r.kitchen,
+  sourceUrl: r.source_url,
+  notes: r.notes,
+});
 
 /* ---------------------- all-in capitalization engine ---------------------- */
 function sizeBucket(o) {
@@ -272,29 +297,30 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      try {
-        for (const md of ["boardwalk", "custom"]) {
-          try {
-            const o = await store.get(`wh:opps:${md}`);
-            if (o && o.value) setOppsByMode((s) => ({ ...s, [md]: JSON.parse(o.value).map(normalizeOpp) }));
-          } catch (e) {}
-          try {
-            const pr = await store.get(`wh:params:${md}`);
-            if (pr && pr.value) setParamsByMode((s) => ({ ...s, [md]: JSON.parse(pr.value) }));
-          } catch (e) {}
+      for (const md of ["boardwalk", "custom"]) {
+        // Load opportunities
+        const { data: rows } = await supabase
+          .from("opportunities").select("*").eq("mode", md).order("created_at", { ascending: false });
+        if (rows && rows.length > 0) {
+          setOppsByMode((s) => ({ ...s, [md]: rows.map(rowToOpp) }));
+        } else if (md === "boardwalk") {
+          // First run — seed the database
+          const seed = SEED_BOARDWALK.map(normalizeOpp);
+          await supabase.from("opportunities").insert(seed.map((o) => oppToRow(o, "boardwalk")));
+          setOppsByMode((s) => ({ ...s, boardwalk: seed }));
         }
-      } catch (e) {}
+        // Load params
+        const { data: p } = await supabase.from("params").select("data").eq("mode", md).single();
+        if (p) setParamsByMode((s) => ({ ...s, [md]: p.data }));
+      }
       setLoaded(true);
     })();
   }, []);
 
+  // Persist params on change (opportunities are persisted at mutation sites)
   useEffect(() => {
     if (!loaded) return;
-    (async () => { try { await store.set(`wh:opps:${mode}`, JSON.stringify(opps)); } catch (e) {} })();
-  }, [opps, mode, loaded]);
-  useEffect(() => {
-    if (!loaded) return;
-    (async () => { try { await store.set(`wh:params:${mode}`, JSON.stringify(params)); } catch (e) {} })();
+    supabase.from("params").upsert({ mode, data: params, updated_at: new Date().toISOString() });
   }, [params, mode, loaded]);
 
   const scored = useMemo(() => {
@@ -317,13 +343,24 @@ export default function App() {
     );
   }, [scored, search]);
 
-  const addOpp = (o) => { setOpps([normalizeOpp({ ...o, id: newId() }), ...opps]); setShowAdd(false); };
-  const delOpp = (id) => {
+  const addOpp = async (o) => {
+    const newOpp = normalizeOpp({ ...o, id: newId() });
+    await supabase.from("opportunities").insert(oppToRow(newOpp, mode));
+    setOpps([newOpp, ...opps]);
+    setShowAdd(false);
+  };
+
+  const delOpp = async (id) => {
     if (typeof window !== "undefined" && window.confirm && !window.confirm("Remove this opportunity from the pipeline?")) return;
+    await supabase.from("opportunities").delete().eq("id", id);
     setOpps(opps.filter((x) => x.id !== id));
   };
-  const resetSeed = () => {
-    if (mode === "boardwalk") setOpps(SEED_BOARDWALK.map(normalizeOpp)); else setOpps([]);
+
+  const resetSeed = async () => {
+    await supabase.from("opportunities").delete().eq("mode", mode);
+    const newOpps = mode === "boardwalk" ? SEED_BOARDWALK.map(normalizeOpp) : [];
+    if (newOpps.length) await supabase.from("opportunities").insert(newOpps.map((o) => oppToRow(o, mode)));
+    setOpps(newOpps);
     setParams(mode === "boardwalk" ? PARAMS_BOARDWALK : PARAMS_CUSTOM);
   };
 
@@ -411,8 +448,8 @@ Field guidance:
           for (const block of data.content) {
             if (block.type !== "tool_use") continue;
             if (block.name === "add_listing") {
-              // Execute the tool — add listing to pipeline immediately (real-time, like first-agent's save)
               const listing = normalizeOpp({ ...block.input, id: newId() });
+              await supabase.from("opportunities").insert(oppToRow(listing, mode));
               setOpps(prev => [listing, ...prev]);
               found++;
               setFindStatus(`Found ${found}: ${block.input.name}`);
