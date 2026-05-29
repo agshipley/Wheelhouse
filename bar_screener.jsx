@@ -348,7 +348,7 @@ export default function App() {
     );
   }, [scored, search]);
 
-  const display = useMemo(() => {
+  const visibleOpps = useMemo(() => {
     const { col, dir } = sortBy;
     if (col === "action") return filtered; // default: scoring-engine order
     const d = dir === "asc" ? 1 : -1;
@@ -624,7 +624,7 @@ Field guidance:
             <ColHd col="action"  label="Action"       align="right"  sortBy={sortBy} onSort={handleSort} />
           </div>
 
-          {display.length === 0 && (
+          {visibleOpps.length === 0 && (
             <div style={{ padding: "40px 16px", textAlign: "center", color: C.muted, fontSize: 13.5 }}>
               {search
                 ? `No results for "${search}" — try a different name or city.`
@@ -632,7 +632,7 @@ Field guidance:
             </div>
           )}
 
-          {display.map((s) => (
+          {visibleOpps.map((s) => (
             <Row key={s.o.id} s={s}
               expanded={expanded === s.o.id}
               onToggle={() => setExpanded(expanded === s.o.id ? null : s.o.id)}
@@ -642,7 +642,7 @@ Field guidance:
 
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 10 }}>
           <span style={{ ...mono, fontSize: 11.5, color: C.muted }}>
-            {display.length}{display.length !== scored.length ? ` of ${scored.length}` : ""} {display.length === 1 ? "opportunity" : "opportunities"}
+            {visibleOpps.length}{visibleOpps.length !== scored.length ? ` of ${scored.length}` : ""} {display.length === 1 ? "opportunity" : "opportunities"}
           </span>
         </div>
 
