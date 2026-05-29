@@ -137,13 +137,14 @@ Deno.serve(async (req) => {
       }];
 
       let found = 0;
-      // Self-imposed 100s deadline — sends a clean done event before Supabase's
-      // 2-minute wall-time kills the connection without warning.
-      const deadline = Date.now() + 100_000;
+      let timedOut = false;
+      // 115s self-imposed deadline — sends a clean done event safely before
+      // Supabase's 2-minute wall-time cuts the wire without warning.
+      const deadline = Date.now() + 115_000;
 
       for (let i = 0; i < 15; i++) {
         if (Date.now() > deadline) {
-          await send("status", `Time limit reached — found ${found} listing${found !== 1 ? "s" : ""}.`);
+          timedOut = true;
           break;
         }
         const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -196,7 +197,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      await send("done", { found });
+      await send("done", { found, timedOut });
     } catch (err) {
       await send("error", err instanceof Error ? err.message : String(err));
     } finally {

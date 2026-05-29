@@ -451,8 +451,15 @@ export default function App() {
           } else if (event.type === "status") {
             setFindStatus(event.data);
           } else if (event.type === "done") {
-            if (found === 0) setFindErr("No listings found — try a different location or price range.");
-            else setShowFind(false);
+            const { found: serverFound, timedOut } = event.data;
+            if (serverFound === 0 && timedOut) {
+              setFindErr("Search timed out before finding any listings — try a more specific location or smaller result count.");
+            } else if (serverFound === 0) {
+              setFindErr("No listings found — try a different location or adjust your price range.");
+            } else {
+              if (timedOut) setFindStatus(`Search timed out — showing ${serverFound} listing${serverFound !== 1 ? "s" : ""} found so far.`);
+              else setShowFind(false);
+            }
           } else if (event.type === "error") {
             throw new Error(event.data);
           }
