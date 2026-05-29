@@ -367,23 +367,36 @@ export default function App() {
         {/* ── CONTROLS ROW ── */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           {/* search */}
-          <div style={{
-            display: "flex", alignItems: "center", gap: 8,
-            background: "#fff", border: `1px solid ${C.line}`, borderRadius: 9,
-            padding: "0 12px", height: 38, flex: "1 1 200px", maxWidth: 320,
-          }}>
-            <Search size={14} color={C.muted} style={{ flexShrink: 0 }} />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name or city…"
-              style={{ ...ui, fontSize: 13, border: "none", outline: "none", flex: 1, background: "transparent", color: C.ink }}
-            />
-            {search && (
-              <button onClick={() => setSearch("")} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, display: "flex", alignItems: "center", padding: 0 }}>
-                <X size={13} />
-              </button>
-            )}
+          <div style={{ display: "flex", alignItems: "center", gap: 0, flex: "1 1 200px", maxWidth: 380 }}>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8,
+              background: "#fff", border: `1px solid ${C.line}`, borderRadius: "9px 0 0 9px",
+              padding: "0 12px", height: 38, flex: 1,
+              borderRight: "none",
+            }}>
+              <Search size={14} color={C.muted} style={{ flexShrink: 0 }} />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setSearch("")}
+                placeholder="Search by name or city…"
+                style={{ ...ui, fontSize: 13, border: "none", outline: "none", flex: 1, background: "transparent", color: C.ink }}
+              />
+              {search && (
+                <button onClick={() => setSearch("")} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, display: "flex", alignItems: "center", padding: 0 }}>
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+            <button
+              style={{
+                ...ui, height: 38, padding: "0 16px", fontSize: 13, fontWeight: 600,
+                background: C.ink, color: C.paper, border: "none", borderRadius: "0 9px 9px 0",
+                cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+              }}
+            >
+              Search
+            </button>
           </div>
 
           <button onClick={() => setShowCriteria((s) => !s)}
