@@ -402,109 +402,58 @@ export default function App() {
   };
 
   const findListings = async (location, maxPrice, count) => {
-    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
-    if (!apiKey) { setFindErr("Set VITE_ANTHROPIC_API_KEY in your Railway environment variables."); return; }
     setFinding(true); setFindErr(null); setFindStatus("Starting search…");
 
-    // Pass existing names so Claude skips duplicates — same pattern as first-agent
-    const existingNames = opps.map(o => o.name).filter(Boolean);
-
-    const systemPrompt = `You are a bar acquisition researcher. Search BizBuySell.com, BizQuest.com, BizBen.com, and LoopNet for bars and restaurants currently listed for sale.
-
-For each listing you find, call the add_listing tool immediately. Use at most 5 web searches total, then stop — do not write a summary or explanation.
-
-Field guidance:
-- licenseType: California ABC "47" = full restaurant/bar license, "48" = bar-only (21+), "unknown" if not stated
-- conceptChange: "none" = buying turnkey as-is, "light" = minor rebrand/refresh, "moderate" = significant remodel or rebrand, "heavy" = full concept change required
-- beachProximity: "on" = within 2 blocks of ocean, "adjacent" = walkable (under 10 min), "inland" = not a beach area, "unknown" if unclear
-- sde: seller's discretionary earnings — the annual owner cash flow figure brokers use. Often labeled "Net Income", "Owner Benefit", or "Cash Flow"
-- sourceUrl: the DIRECT URL to this specific listing, not the site homepage${existingNames.length ? `\n\nDO NOT add these already-found listings: ${existingNames.join(", ")}` : ""}`;
-
-    // Custom tool — same pattern as first-agent's save_leads_to_spreadsheet
-    const ADD_LISTING_TOOL = {
-      name: "add_listing",
-      description: "Adds a bar or restaurant listing to the acquisition pipeline. Call this once per listing found.",
-      input_schema: {
-        type: "object",
-        required: ["name", "city"],
-        properties: {
-          name:            { type: "string",  description: "Business name" },
-          city:            { type: "string",  description: "City and state" },
-          asking:          { type: "number",  description: "Asking price USD" },
-          sqft:            { type: "number",  description: "Square footage" },
-          capacity:        { type: "number",  description: "Seated/standing capacity" },
-          licenseType:     { type: "string",  enum: ["47", "48", "unknown"] },
-          rentMonthly:     { type: "number",  description: "Monthly rent USD" },
-          leaseYears:      { type: "number",  description: "Remaining lease years" },
-          sde:             { type: "number",  description: "Annual seller discretionary earnings" },
-          revenue:         { type: "number",  description: "Annual gross revenue" },
-          sellerFinancing: { type: "boolean", description: "Seller financing available" },
-          conceptChange:   { type: "string",  enum: ["none", "light", "moderate", "heavy"] },
-          beachProximity:  { type: "string",  enum: ["on", "adjacent", "inland", "unknown"] },
-          kitchen:         { type: "boolean", description: "Commercial kitchen present" },
-          notes:           { type: "string",  description: "Key facts, max 120 chars" },
-          sourceUrl:       { type: "string",  description: "Direct URL to this listing" },
-        },
-      },
-    };
+    const existingNames = opps.map((o) => o.name).filter(Boolean);
+    const fnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/find-listings`;
 
     try {
-      let messages = [{
-        role: "user",
-        content: `Find ${count} active bars or restaurants for sale in "${location}"${maxPrice ? ` under $${Number(maxPrice).toLocaleString()}` : ""}. Call add_listing for each one you find.`,
-      }];
-      let found = 0;
+      const res = await fetch(fnUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ location, maxPrice, count, mode, existingNames }),
+      });
 
-      for (let i = 0; i < 15; i++) {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "anthropic-beta": "web-search-2025-03-05",
-            "anthropic-dangerous-direct-browser-access": "true",
-          },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 4000,
-            system: systemPrompt,
-            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }, ADD_LISTING_TOOL],
-            messages,
-          }),
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error.message);
-
-        messages.push({ role: "assistant", content: data.content });
-
-        if (data.stop_reason === "end_turn") break;
-
-        if (data.stop_reason === "tool_use") {
-          const toolResults = [];
-          for (const block of data.content) {
-            if (block.type !== "tool_use") continue;
-            if (block.name === "add_listing") {
-              const listing = normalizeOpp({ ...block.input, id: newId() });
-              await supabase.from("opportunities").insert(oppToRow(listing, mode));
-              setOpps(prev => [listing, ...prev]);
-              found++;
-              setFindStatus(`Found ${found}: ${block.input.name}`);
-              toolResults.push({ type: "tool_result", tool_use_id: block.id, content: `Added "${block.input.name}" to pipeline.` });
-            } else {
-              // web_search — server-side, return empty content as required
-              setFindStatus("Searching the web…");
-              toolResults.push({ type: "tool_result", tool_use_id: block.id, content: "" });
-            }
-          }
-          messages.push({ role: "user", content: toolResults });
-        } else {
-          break;
-        }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Search failed (${res.status})`);
       }
 
-      if (found === 0) throw new Error("No listings found — try a different location or price range.");
-      setShowFind(false);
+      // Read SSE stream — listings appear in the UI as Claude finds them
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let found = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop(); // hold incomplete last line
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          let event;
+          try { event = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (event.type === "listing") {
+            const listing = normalizeOpp(event.data);
+            setOpps((prev) => [listing, ...prev]);
+            found++;
+          } else if (event.type === "status") {
+            setFindStatus(event.data);
+          } else if (event.type === "done") {
+            if (found === 0) setFindErr("No listings found — try a different location or price range.");
+            else setShowFind(false);
+          } else if (event.type === "error") {
+            throw new Error(event.data);
+          }
+        }
+      }
     } catch (e) {
       setFindErr(e.message || "Search failed — try again.");
     }
