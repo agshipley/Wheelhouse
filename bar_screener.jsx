@@ -289,6 +289,7 @@ export default function App() {
   const [findStatus, setFindStatus] = useState(null);
   const [expanded, setExpanded] = useState(null);
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState({ col: "action", dir: "asc" });
 
   const params = paramsByMode[mode];
   const opps = oppsByMode[mode];
@@ -297,21 +298,25 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      for (const md of ["boardwalk", "custom"]) {
-        // Load opportunities
-        const { data: rows } = await supabase
-          .from("opportunities").select("*").eq("mode", md).order("created_at", { ascending: false });
-        if (rows && rows.length > 0) {
-          setOppsByMode((s) => ({ ...s, [md]: rows.map(rowToOpp) }));
-        } else if (md === "boardwalk") {
-          // First run — seed the database
-          const seed = SEED_BOARDWALK.map(normalizeOpp);
-          await supabase.from("opportunities").insert(seed.map((o) => oppToRow(o, "boardwalk")));
-          setOppsByMode((s) => ({ ...s, boardwalk: seed }));
+      try {
+        for (const md of ["boardwalk", "custom"]) {
+          const { data: rows, error } = await supabase
+            .from("opportunities").select("*").eq("mode", md).order("created_at", { ascending: false });
+          if (error) throw error;
+          if (rows && rows.length > 0) {
+            setOppsByMode((s) => ({ ...s, [md]: rows.map(rowToOpp) }));
+          } else if (md === "boardwalk") {
+            // First run — seed the database
+            const seed = SEED_BOARDWALK.map(normalizeOpp);
+            await supabase.from("opportunities").insert(seed.map((o) => oppToRow(o, "boardwalk")));
+            setOppsByMode((s) => ({ ...s, boardwalk: seed }));
+          }
+          const { data: p } = await supabase.from("params").select("data").eq("mode", md).single();
+          if (p) setParamsByMode((s) => ({ ...s, [md]: p.data }));
         }
-        // Load params
-        const { data: p } = await supabase.from("params").select("data").eq("mode", md).single();
-        if (p) setParamsByMode((s) => ({ ...s, [md]: p.data }));
+      } catch (e) {
+        // Supabase unavailable — fall back to in-memory seed data
+        console.warn("Supabase load failed, running offline:", e.message);
       }
       setLoaded(true);
     })();
@@ -342,6 +347,32 @@ export default function App() {
       s.o.name.toLowerCase().includes(q) || (s.o.city || "").toLowerCase().includes(q)
     );
   }, [scored, search]);
+
+  const display = useMemo(() => {
+    const { col, dir } = sortBy;
+    if (col === "action") return filtered; // default: scoring-engine order
+    const d = dir === "asc" ? 1 : -1;
+    const num = (a, b) => {
+      if (a == null && b == null) return 0;
+      if (a == null) return 1;
+      if (b == null) return -1;
+      return d * (a - b);
+    };
+    return [...filtered].sort((a, b) => {
+      switch (col) {
+        case "name":    return d * (a.o.name || "").localeCompare(b.o.name || "");
+        case "asking":  return num(a.o.asking, b.o.asking);
+        case "allin":   return num(a.fin?.allLo, b.fin?.allLo);
+        case "partner": return num(a.fin?.checkLo, b.fin?.checkLo);
+        case "concept": return num(a.cScore, b.cScore);
+        case "econ":    return num(a.eObj.score, b.eObj.score);
+        default:        return 0;
+      }
+    });
+  }, [filtered, sortBy]);
+
+  const handleSort = (col) =>
+    setSortBy((prev) => ({ col, dir: prev.col === col && prev.dir === "asc" ? "desc" : "asc" }));
 
   const addOpp = async (o) => {
     const newOpp = normalizeOpp({ ...o, id: newId() });
@@ -581,19 +612,19 @@ Field guidance:
           {/* table header */}
           <div style={{
             display: "grid", gridTemplateColumns: GRID_COLS, gap: 8, alignItems: "center",
-            ...mono, fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted,
+            ...mono, fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase",
             padding: "10px 16px", borderBottom: `1px solid ${C.line}`,
           }}>
-            <div>Target</div>
-            <div style={{ textAlign: "right" }}>Asking</div>
-            <div style={{ textAlign: "right" }}>All-in range</div>
-            <div style={{ textAlign: "right" }}>Partner $</div>
-            <div style={{ textAlign: "center" }}>Concept</div>
-            <div style={{ textAlign: "center" }}>Econ</div>
-            <div style={{ textAlign: "right" }}>Action</div>
+            <ColHd col="name"    label="Target"       align="left"   sortBy={sortBy} onSort={handleSort} />
+            <ColHd col="asking"  label="Asking"       align="right"  sortBy={sortBy} onSort={handleSort} />
+            <ColHd col="allin"   label="All-in range" align="right"  sortBy={sortBy} onSort={handleSort} />
+            <ColHd col="partner" label="Partner $"    align="right"  sortBy={sortBy} onSort={handleSort} />
+            <ColHd col="concept" label="Concept"      align="center" sortBy={sortBy} onSort={handleSort} />
+            <ColHd col="econ"    label="Econ"         align="center" sortBy={sortBy} onSort={handleSort} />
+            <ColHd col="action"  label="Action"       align="right"  sortBy={sortBy} onSort={handleSort} />
           </div>
 
-          {filtered.length === 0 && (
+          {display.length === 0 && (
             <div style={{ padding: "40px 16px", textAlign: "center", color: C.muted, fontSize: 13.5 }}>
               {search
                 ? `No results for "${search}" — try a different name or city.`
@@ -601,7 +632,7 @@ Field guidance:
             </div>
           )}
 
-          {filtered.map((s) => (
+          {display.map((s) => (
             <Row key={s.o.id} s={s}
               expanded={expanded === s.o.id}
               onToggle={() => setExpanded(expanded === s.o.id ? null : s.o.id)}
@@ -611,7 +642,7 @@ Field guidance:
 
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 10 }}>
           <span style={{ ...mono, fontSize: 11.5, color: C.muted }}>
-            {filtered.length}{filtered.length !== scored.length ? ` of ${scored.length}` : ""} {filtered.length === 1 ? "opportunity" : "opportunities"}
+            {display.length}{display.length !== scored.length ? ` of ${scored.length}` : ""} {display.length === 1 ? "opportunity" : "opportunities"}
           </span>
         </div>
 
@@ -775,6 +806,27 @@ function Row({ s, expanded, onToggle, onDelete }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── sortable column header ── */
+function ColHd({ col, label, align, sortBy, onSort }) {
+  const active = sortBy.col === col;
+  const arrow = active ? (sortBy.dir === "asc" ? " ↑" : " ↓") : "";
+  return (
+    <div
+      onClick={() => onSort(col)}
+      style={{
+        textAlign: align, cursor: "pointer", userSelect: "none",
+        color: active ? C.ink : C.muted,
+        display: "flex", alignItems: "center", gap: 2,
+        justifyContent: align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start",
+      }}
+    >
+      {label}
+      <span style={{ fontSize: 9, opacity: active ? 1 : 0, transition: "opacity 0.1s" }}>{arrow}</span>
+      {!active && <span style={{ fontSize: 9, opacity: 0.25 }}>↕</span>}
     </div>
   );
 }
