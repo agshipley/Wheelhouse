@@ -103,6 +103,7 @@ const rowToOpp = (r) => normalizeOpp({
   kitchen: r.kitchen,
   sourceUrl: r.source_url,
   notes: r.notes,
+  createdAt: r.created_at ?? null,
 });
 
 /* ---------------------- all-in capitalization engine ---------------------- */
@@ -271,7 +272,7 @@ const ORDER = { "Pursue now": 0, "Economics-led alternative": 1, "Broker call �
 /* ============================================================
    TABLE GRID — single source of truth for column widths
    ============================================================ */
-const GRID_COLS = "minmax(140px, 1.5fr) minmax(100px, 1fr) 88px 168px 132px 68px 68px minmax(148px, 1fr)";
+const GRID_COLS = "minmax(140px, 1.5fr) minmax(100px, 1fr) 68px 88px 168px 132px 68px 68px minmax(148px, 1fr)";
 
 /* ============================================================
    UI
@@ -362,6 +363,10 @@ export default function App() {
       switch (col) {
         case "name":    return d * (a.o.name || "").localeCompare(b.o.name || "");
       case "city":    return d * (a.o.city || "").localeCompare(b.o.city || "");
+      case "date":    return num(
+        a.o.createdAt ? new Date(a.o.createdAt).getTime() : 0,
+        b.o.createdAt ? new Date(b.o.createdAt).getTime() : 0
+      );
         case "asking":  return num(a.o.asking, b.o.asking);
         case "allin":   return num(a.fin?.allLo, b.fin?.allLo);
         case "partner": return num(a.fin?.checkLo, b.fin?.checkLo);
@@ -618,6 +623,7 @@ Field guidance:
           }}>
             <ColHd col="name"    label="Name"         align="left"   sortBy={sortBy} onSort={handleSort} />
             <ColHd col="city"    label="City"         align="left"   sortBy={sortBy} onSort={handleSort} />
+            <ColHd col="date"    label="Added"        align="center" sortBy={sortBy} onSort={handleSort} />
             <ColHd col="asking"  label="Asking"       align="right"  sortBy={sortBy} onSort={handleSort} />
             <ColHd col="allin"   label="All-in range" align="right"  sortBy={sortBy} onSort={handleSort} />
             <ColHd col="partner" label="Partner $"    align="right"  sortBy={sortBy} onSort={handleSort} />
@@ -720,6 +726,10 @@ function Row({ s, expanded, onToggle, onDelete }) {
         </div>
 
         <div style={{ ...ui, fontSize: 13, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.city || "—"}</div>
+
+        <div style={{ ...mono, fontSize: 11.5, color: C.muted, textAlign: "center" }}>
+          {o.createdAt ? new Date(o.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
+        </div>
 
         <div style={{ ...mono, fontSize: 13, textAlign: "right" }}>{m(Number(o.asking))}</div>
         <div style={{ ...mono, fontSize: 12.5, textAlign: "right", color: C.muted }}>{fin ? rangeM(fin.allLo, fin.allHi) : "—"}</div>
