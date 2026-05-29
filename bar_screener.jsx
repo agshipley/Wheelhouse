@@ -261,6 +261,7 @@ export default function App() {
   const [showFind, setShowFind] = useState(false);
   const [finding, setFinding] = useState(false);
   const [findErr, setFindErr] = useState(null);
+  const [findStatus, setFindStatus] = useState(null);
   const [expanded, setExpanded] = useState(null);
   const [search, setSearch] = useState("");
 
@@ -329,15 +330,58 @@ export default function App() {
   const findListings = async (location, maxPrice, count) => {
     const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
     if (!apiKey) { setFindErr("Set VITE_ANTHROPIC_API_KEY in your Railway environment variables."); return; }
-    setFinding(true); setFindErr(null);
+    setFinding(true); setFindErr(null); setFindStatus("Starting search…");
 
-    const prompt = `Search BizBuySell.com, BizQuest.com, and BizBen.com for bar and restaurant businesses currently listed for sale in "${location}"${maxPrice ? ` priced under $${Number(maxPrice).toLocaleString()}` : ""}. Find ${count} active listings.\n\nFor each listing return a JSON object with exactly these fields:\nname (string), city (string), asking (number or null), sqft (number or null), capacity (number or null), licenseType ("47"|"48"|"unknown"), rentMonthly (number or null), leaseYears (number or null), sde (number or null), revenue (number or null), sellerFinancing (boolean), conceptChange ("none"|"light"|"moderate"|"heavy"), beachProximity ("on"|"adjacent"|"inland"|"unknown"), kitchen (boolean), notes (string under 100 chars), sourceUrl (direct listing URL).\n\nReturn ONLY a valid JSON array. No markdown, no prose.`;
+    // Pass existing names so Claude skips duplicates — same pattern as first-agent
+    const existingNames = opps.map(o => o.name).filter(Boolean);
+
+    const systemPrompt = `You are a bar acquisition researcher. Search BizBuySell.com, BizQuest.com, BizBen.com, and LoopNet for bars and restaurants currently listed for sale.
+
+For each listing you find, call the add_listing tool immediately. Use at most 5 web searches total, then stop — do not write a summary or explanation.
+
+Field guidance:
+- licenseType: California ABC "47" = full restaurant/bar license, "48" = bar-only (21+), "unknown" if not stated
+- conceptChange: "none" = buying turnkey as-is, "light" = minor rebrand/refresh, "moderate" = significant remodel or rebrand, "heavy" = full concept change required
+- beachProximity: "on" = within 2 blocks of ocean, "adjacent" = walkable (under 10 min), "inland" = not a beach area, "unknown" if unclear
+- sde: seller's discretionary earnings — the annual owner cash flow figure brokers use. Often labeled "Net Income", "Owner Benefit", or "Cash Flow"
+- sourceUrl: the DIRECT URL to this specific listing, not the site homepage${existingNames.length ? `\n\nDO NOT add these already-found listings: ${existingNames.join(", ")}` : ""}`;
+
+    // Custom tool — same pattern as first-agent's save_leads_to_spreadsheet
+    const ADD_LISTING_TOOL = {
+      name: "add_listing",
+      description: "Adds a bar or restaurant listing to the acquisition pipeline. Call this once per listing found.",
+      input_schema: {
+        type: "object",
+        required: ["name", "city"],
+        properties: {
+          name:            { type: "string",  description: "Business name" },
+          city:            { type: "string",  description: "City and state" },
+          asking:          { type: "number",  description: "Asking price USD" },
+          sqft:            { type: "number",  description: "Square footage" },
+          capacity:        { type: "number",  description: "Seated/standing capacity" },
+          licenseType:     { type: "string",  enum: ["47", "48", "unknown"] },
+          rentMonthly:     { type: "number",  description: "Monthly rent USD" },
+          leaseYears:      { type: "number",  description: "Remaining lease years" },
+          sde:             { type: "number",  description: "Annual seller discretionary earnings" },
+          revenue:         { type: "number",  description: "Annual gross revenue" },
+          sellerFinancing: { type: "boolean", description: "Seller financing available" },
+          conceptChange:   { type: "string",  enum: ["none", "light", "moderate", "heavy"] },
+          beachProximity:  { type: "string",  enum: ["on", "adjacent", "inland", "unknown"] },
+          kitchen:         { type: "boolean", description: "Commercial kitchen present" },
+          notes:           { type: "string",  description: "Key facts, max 120 chars" },
+          sourceUrl:       { type: "string",  description: "Direct URL to this listing" },
+        },
+      },
+    };
 
     try {
-      let messages = [{ role: "user", content: prompt }];
-      let finalText = null;
+      let messages = [{
+        role: "user",
+        content: `Find ${count} active bars or restaurants for sale in "${location}"${maxPrice ? ` under $${Number(maxPrice).toLocaleString()}` : ""}. Call add_listing for each one you find.`,
+      }];
+      let found = 0;
 
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 15; i++) {
         const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
@@ -348,48 +392,50 @@ export default function App() {
             "anthropic-dangerous-direct-browser-access": "true",
           },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514", max_tokens: 4000,
-            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 4000,
+            system: systemPrompt,
+            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }, ADD_LISTING_TOOL],
             messages,
           }),
         });
         const data = await res.json();
         if (data.error) throw new Error(data.error.message);
 
-        if (data.stop_reason === "end_turn") {
-          finalText = (data.content || []).find(b => b.type === "text")?.text;
-          break;
-        }
+        messages.push({ role: "assistant", content: data.content });
+
+        if (data.stop_reason === "end_turn") break;
+
         if (data.stop_reason === "tool_use") {
-          messages = [
-            ...messages,
-            { role: "assistant", content: data.content },
-            {
-              role: "user",
-              content: data.content
-                .filter(b => b.type === "tool_use")
-                .map(b => ({ type: "tool_result", tool_use_id: b.id, content: "" })),
-            },
-          ];
+          const toolResults = [];
+          for (const block of data.content) {
+            if (block.type !== "tool_use") continue;
+            if (block.name === "add_listing") {
+              // Execute the tool — add listing to pipeline immediately (real-time, like first-agent's save)
+              const listing = normalizeOpp({ ...block.input, id: newId() });
+              setOpps(prev => [listing, ...prev]);
+              found++;
+              setFindStatus(`Found ${found}: ${block.input.name}`);
+              toolResults.push({ type: "tool_result", tool_use_id: block.id, content: `Added "${block.input.name}" to pipeline.` });
+            } else {
+              // web_search — server-side, return empty content as required
+              setFindStatus("Searching the web…");
+              toolResults.push({ type: "tool_result", tool_use_id: block.id, content: "" });
+            }
+          }
+          messages.push({ role: "user", content: toolResults });
         } else {
-          finalText = (data.content || []).find(b => b.type === "text")?.text;
           break;
         }
       }
 
-      if (!finalText) throw new Error("No response from search.");
-      const clean = finalText.replace(/```json/g, "").replace(/```/g, "").trim();
-      const match = clean.match(/\[[\s\S]*\]/);
-      if (!match) throw new Error("Couldn't parse listings from response.");
-      const listings = JSON.parse(match[0]);
-      if (!Array.isArray(listings) || !listings.length) throw new Error("No listings found — try a different location.");
-
-      setOpps(prev => [...listings.map(j => normalizeOpp({ ...j, id: newId() })), ...prev]);
+      if (found === 0) throw new Error("No listings found — try a different location or price range.");
       setShowFind(false);
     } catch (e) {
       setFindErr(e.message || "Search failed — try again.");
     }
     setFinding(false);
+    setFindStatus(null);
   };
 
   return (
@@ -490,7 +536,7 @@ export default function App() {
         </div>
 
         {showCriteria && <Criteria params={params} setParams={setParams} mode={mode} />}
-        {showFind && <FindPanel onFind={findListings} onClose={() => setShowFind(false)} finding={finding} error={findErr} />}
+        {showFind && <FindPanel onFind={findListings} onClose={() => setShowFind(false)} finding={finding} status={findStatus} error={findErr} />}
 
         {/* ── PIPELINE TABLE ── */}
         <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflowX: "auto", background: C.card }}>
@@ -925,7 +971,7 @@ function In({ label, v, on, w, mono: isMono, placeholder }) {
 }
 
 /* ── find listings panel ── */
-function FindPanel({ onFind, onClose, finding, error }) {
+function FindPanel({ onFind, onClose, finding, status, error }) {
   const [location, setLocation] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
   const [count, setCount] = useState("5");
@@ -961,14 +1007,16 @@ function FindPanel({ onFind, onClose, finding, error }) {
         </button>
       </div>
 
-      {finding && (
-        <div style={{ ...ui, fontSize: 12.5, color: C.muted, marginTop: 10 }}>
-          Searching listing sites for active bars and restaurants for sale… takes 15–30 seconds.
+      {(finding || status) && (
+        <div style={{ ...ui, fontSize: 12.5, color: C.muted, marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: C.accent, animation: "pulse 1.2s ease-in-out infinite" }} />
+          {status || "Searching listing sites… takes 15–30 seconds."}
         </div>
       )}
       {error && (
         <div style={{ ...ui, fontSize: 12.5, color: C.red, marginTop: 10 }}>{error}</div>
       )}
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
     </div>
   );
 }
