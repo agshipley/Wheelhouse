@@ -6,5 +6,6 @@ export default defineConfig({
   preview: {
     port: parseInt(process.env.PORT) || 4173,
     host: true,
+    allowedHosts: ["wheelhouse-production-f59a.up.railway.app"],
   },
 });
