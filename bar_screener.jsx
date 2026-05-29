@@ -271,7 +271,7 @@ const ORDER = { "Pursue now": 0, "Economics-led alternative": 1, "Broker call �
 /* ============================================================
    TABLE GRID — single source of truth for column widths
    ============================================================ */
-const GRID_COLS = "minmax(160px, 2fr) 88px 168px 132px 68px 68px minmax(148px, 1fr)";
+const GRID_COLS = "minmax(140px, 1.5fr) minmax(100px, 1fr) 88px 168px 132px 68px 68px minmax(148px, 1fr)";
 
 /* ============================================================
    UI
@@ -361,6 +361,7 @@ export default function App() {
     return [...filtered].sort((a, b) => {
       switch (col) {
         case "name":    return d * (a.o.name || "").localeCompare(b.o.name || "");
+      case "city":    return d * (a.o.city || "").localeCompare(b.o.city || "");
         case "asking":  return num(a.o.asking, b.o.asking);
         case "allin":   return num(a.fin?.allLo, b.fin?.allLo);
         case "partner": return num(a.fin?.checkLo, b.fin?.checkLo);
@@ -615,7 +616,8 @@ Field guidance:
             ...mono, fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase",
             padding: "10px 16px", borderBottom: `1px solid ${C.line}`,
           }}>
-            <ColHd col="name"    label="Target"       align="left"   sortBy={sortBy} onSort={handleSort} />
+            <ColHd col="name"    label="Name"         align="left"   sortBy={sortBy} onSort={handleSort} />
+            <ColHd col="city"    label="City"         align="left"   sortBy={sortBy} onSort={handleSort} />
             <ColHd col="asking"  label="Asking"       align="right"  sortBy={sortBy} onSort={handleSort} />
             <ColHd col="allin"   label="All-in range" align="right"  sortBy={sortBy} onSort={handleSort} />
             <ColHd col="partner" label="Partner $"    align="right"  sortBy={sortBy} onSort={handleSort} />
@@ -714,9 +716,10 @@ function Row({ s, expanded, onToggle, onDelete }) {
           </span>
           <div style={{ minWidth: 0 }}>
             <div style={{ ...ui, fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.name}</div>
-            <div style={{ ...ui, fontSize: 11.5, color: C.muted }}>{o.city}</div>
           </div>
         </div>
+
+        <div style={{ ...ui, fontSize: 13, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.city || "—"}</div>
 
         <div style={{ ...mono, fontSize: 13, textAlign: "right" }}>{m(Number(o.asking))}</div>
         <div style={{ ...mono, fontSize: 12.5, textAlign: "right", color: C.muted }}>{fin ? rangeM(fin.allLo, fin.allHi) : "—"}</div>
