@@ -258,6 +258,9 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [showCriteria, setShowCriteria] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [showFind, setShowFind] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [findErr, setFindErr] = useState(null);
   const [expanded, setExpanded] = useState(null);
   const [search, setSearch] = useState("");
 
@@ -321,6 +324,72 @@ export default function App() {
   const resetSeed = () => {
     if (mode === "boardwalk") setOpps(SEED_BOARDWALK.map(normalizeOpp)); else setOpps([]);
     setParams(mode === "boardwalk" ? PARAMS_BOARDWALK : PARAMS_CUSTOM);
+  };
+
+  const findListings = async (location, maxPrice, count) => {
+    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
+    if (!apiKey) { setFindErr("Set VITE_ANTHROPIC_API_KEY in your Railway environment variables."); return; }
+    setFinding(true); setFindErr(null);
+
+    const prompt = `Search BizBuySell.com, BizQuest.com, and BizBen.com for bar and restaurant businesses currently listed for sale in "${location}"${maxPrice ? ` priced under $${Number(maxPrice).toLocaleString()}` : ""}. Find ${count} active listings.\n\nFor each listing return a JSON object with exactly these fields:\nname (string), city (string), asking (number or null), sqft (number or null), capacity (number or null), licenseType ("47"|"48"|"unknown"), rentMonthly (number or null), leaseYears (number or null), sde (number or null), revenue (number or null), sellerFinancing (boolean), conceptChange ("none"|"light"|"moderate"|"heavy"), beachProximity ("on"|"adjacent"|"inland"|"unknown"), kitchen (boolean), notes (string under 100 chars), sourceUrl (direct listing URL).\n\nReturn ONLY a valid JSON array. No markdown, no prose.`;
+
+    try {
+      let messages = [{ role: "user", content: prompt }];
+      let finalText = null;
+
+      for (let i = 0; i < 10; i++) {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "web-search-2025-03-05",
+            "anthropic-dangerous-direct-browser-access": "true",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514", max_tokens: 4000,
+            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+            messages,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
+
+        if (data.stop_reason === "end_turn") {
+          finalText = (data.content || []).find(b => b.type === "text")?.text;
+          break;
+        }
+        if (data.stop_reason === "tool_use") {
+          messages = [
+            ...messages,
+            { role: "assistant", content: data.content },
+            {
+              role: "user",
+              content: data.content
+                .filter(b => b.type === "tool_use")
+                .map(b => ({ type: "tool_result", tool_use_id: b.id, content: "" })),
+            },
+          ];
+        } else {
+          finalText = (data.content || []).find(b => b.type === "text")?.text;
+          break;
+        }
+      }
+
+      if (!finalText) throw new Error("No response from search.");
+      const clean = finalText.replace(/```json/g, "").replace(/```/g, "").trim();
+      const match = clean.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error("Couldn't parse listings from response.");
+      const listings = JSON.parse(match[0]);
+      if (!Array.isArray(listings) || !listings.length) throw new Error("No listings found — try a different location.");
+
+      setOpps(prev => [...listings.map(j => normalizeOpp({ ...j, id: newId() })), ...prev]);
+      setShowFind(false);
+    } catch (e) {
+      setFindErr(e.message || "Search failed — try again.");
+    }
+    setFinding(false);
   };
 
   return (
@@ -407,14 +476,21 @@ export default function App() {
             <RotateCcw size={14} /> Reset
           </button>
 
-          {/* primary CTA — right side */}
-          <button onClick={() => setShowAdd(true)}
-            style={{ ...btn(C.accent, "#fff"), marginLeft: "auto", padding: "9px 20px", fontSize: 14, fontWeight: 700 }}>
-            <Plus size={16} /> Add Opportunity
-          </button>
+          {/* right-side CTAs */}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button onClick={() => { setShowFind(s => !s); setFindErr(null); }}
+              style={{ ...btn(showFind ? C.accent : C.card, showFind ? "#fff" : C.accent, !showFind), border: showFind ? "none" : `1.5px solid ${C.accent}` }}>
+              <Sparkles size={14} /> Find Listings
+            </button>
+            <button onClick={() => setShowAdd(true)}
+              style={{ ...btn(C.accent, "#fff"), padding: "9px 20px", fontSize: 14, fontWeight: 700 }}>
+              <Plus size={16} /> Add Opportunity
+            </button>
+          </div>
         </div>
 
         {showCriteria && <Criteria params={params} setParams={setParams} mode={mode} />}
+        {showFind && <FindPanel onFind={findListings} onClose={() => setShowFind(false)} finding={finding} error={findErr} />}
 
         {/* ── PIPELINE TABLE ── */}
         <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflowX: "auto", background: C.card }}>
@@ -838,12 +914,61 @@ function AddForm({ onAdd, onClose }) {
   );
 }
 
-function In({ label, v, on, w, mono: isMono }) {
+function In({ label, v, on, w, mono: isMono, placeholder }) {
   return (
     <div style={{ width: w === "100%" ? "100%" : w }}>
       <div style={{ ...mono, fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted, marginBottom: 4 }}>{label}</div>
-      <input value={v} onChange={(e) => on(e.target.value)}
+      <input value={v} onChange={(e) => on(e.target.value)} placeholder={placeholder || ""}
         style={{ ...(isMono ? mono : ui), fontSize: 12.5, width: "100%", border: `1px solid ${C.line}`, borderRadius: 7, padding: "7px 10px", outline: "none", background: "#fff", color: C.ink, boxSizing: "border-box" }} />
+    </div>
+  );
+}
+
+/* ── find listings panel ── */
+function FindPanel({ onFind, onClose, finding, error }) {
+  const [location, setLocation] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [count, setCount] = useState("5");
+
+  const go = () => {
+    if (!location.trim() || finding) return;
+    onFind(location.trim(), maxPrice ? Number(maxPrice) : null, Number(count));
+  };
+
+  return (
+    <div style={{ border: `1px solid ${C.accent}55`, borderRadius: 12, background: `${C.accent}08`, padding: "16px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Sparkles size={15} color={C.accent} />
+          <span style={{ ...ui, fontSize: 14, fontWeight: 700, color: C.ink }}>Find Live Listings</span>
+          <span style={{ ...ui, fontSize: 12, color: C.muted }}>searches BizBuySell · BizQuest · BizBen in real time</span>
+        </div>
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, display: "flex" }}><X size={16} /></button>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
+        <In label="Location / area *" v={location} on={setLocation} w={260} placeholder="e.g. Huntington Beach, Orange County" />
+        <In label="Max price ($)" v={maxPrice} on={(v) => setMaxPrice(v.replace(/[^0-9]/g, ""))} w={140} mono placeholder="no limit" />
+        <Field label="# of results">
+          <Seg opts={[["3", "3"], ["5", "5"], ["8", "8"]]} v={count} on={setCount} />
+        </Field>
+        <button
+          onClick={go}
+          disabled={!location.trim() || finding}
+          style={{ ...btn(C.accent, "#fff"), opacity: (!location.trim() || finding) ? 0.5 : 1, padding: "9px 20px", alignSelf: "flex-end" }}
+        >
+          <Sparkles size={14} /> {finding ? "Searching the web…" : "Find Listings"}
+        </button>
+      </div>
+
+      {finding && (
+        <div style={{ ...ui, fontSize: 12.5, color: C.muted, marginTop: 10 }}>
+          Searching listing sites for active bars and restaurants for sale… takes 15–30 seconds.
+        </div>
+      )}
+      {error && (
+        <div style={{ ...ui, fontSize: 12.5, color: C.red, marginTop: 10 }}>{error}</div>
+      )}
     </div>
   );
 }
