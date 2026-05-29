@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import {
   Anchor, Plus, Trash2, ChevronDown, ChevronRight, Sparkles,
-  SlidersHorizontal, RotateCcw, ExternalLink, AlertCircle, X,
+  SlidersHorizontal, RotateCcw, ExternalLink, AlertCircle, X, Search,
 } from "lucide-react";
 
 /* ============================================================
@@ -119,7 +119,6 @@ function computeAllIn(o, p) {
   rows.push(["Contingency (10%)", contLo, contHi]);
   const allLo = (subLo + contLo) * 1000, allHi = (subHi + contHi) * 1000;
 
-  // financing stack -> partner check
   const purchaseBase = (pLo + pHi) / 2;
   const debt = p.useSBA && ask > 200000 ? Math.min(p.sbaPct * purchaseBase, 1500000) : 0;
   const carry =
@@ -140,7 +139,6 @@ function conceptScore(o, p) {
   if (o.beachProximity === "on") s += 1.5 * beachW;
   else if (o.beachProximity === "adjacent") s += 0.5 * beachW;
   else if (o.beachProximity === "inland") s -= 1.5 * beachW;
-  // "unknown" intentionally applies no adjustment (neutral until confirmed)
   const cap = o.capacity;
   if (cap) {
     if (cap >= p.capLow && cap <= p.capHigh) s += 1;
@@ -149,7 +147,7 @@ function conceptScore(o, p) {
   }
   if (o.licenseType && o.licenseType !== "unknown") {
     if (p.prefLicense === "either" || p.prefLicense === o.licenseType) s += 0.5;
-    if (p.conceptPriority === "beach" && o.licenseType === "48") s -= 1; // 21+ kills daytime
+    if (p.conceptPriority === "beach" && o.licenseType === "48") s -= 1;
   } else s -= 0.2;
   if (o.kitchen === true) s += 0.3;
   if (o.leaseYears) { if (o.leaseYears >= 10) s += 0.3; else if (o.leaseYears < 5) s -= 0.3; }
@@ -228,7 +226,7 @@ const PARAMS_CUSTOM = {
   capLow: 60, capHigh: 150, prefLicense: "either", conceptPriority: "cashflow",
 };
 
-/* ---------------------- seed pipeline (the real shortlist) ---------------------- */
+/* ---------------------- seed pipeline ---------------------- */
 const SEED_BOARDWALK = [
   { id: "ob", name: "Ocean Beach (SD)", city: "Ocean Beach, San Diego", asking: 345000, sqft: 2076, capacity: 95, licenseType: "47", rentMonthly: 9336, leaseYears: 15, sde: null, revenue: null, sellerFinancing: true, conceptChange: "moderate", beachProximity: "on", kitchen: true, sourceUrl: "https://www.bizquest.com/asset-sales/ocean-beach-restaurant-bar-for-sale/BW2316437", notes: "Brand/menu excluded. Reduced from $395k." },
   { id: "sc", name: "San Clemente Sports B&G", city: "San Clemente", asking: 550000, sqft: null, capacity: null, licenseType: "47", rentMonthly: null, leaseYears: null, sde: null, revenue: null, sellerFinancing: true, conceptChange: "light", beachProximity: "adjacent", kitchen: true, sourceUrl: "https://www.bizben.com/business-for-sale/bar-and-grill-for-sale-in-san-clemente-california-279513.php", notes: "$270k down + owner carry. Size NDA-gated." },
@@ -246,6 +244,11 @@ const TONE_COLOR = { green: C.green, accent: C.accent, navy: C.navy, amber: C.am
 const ORDER = { "Pursue now": 0, "Economics-led alternative": 1, "Broker call — verify financials": 2, "Concept fit, weak economics": 3, "Pursue if capital expands": 4, "Hold / investigate": 5, "Pass": 6, "Pass — rent kills it": 7 };
 
 /* ============================================================
+   TABLE GRID — single source of truth for column widths
+   ============================================================ */
+const GRID_COLS = "minmax(160px, 2fr) 88px 168px 132px 68px 68px minmax(148px, 1fr)";
+
+/* ============================================================
    UI
    ============================================================ */
 export default function App() {
@@ -256,13 +259,13 @@ export default function App() {
   const [showCriteria, setShowCriteria] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [expanded, setExpanded] = useState(null);
+  const [search, setSearch] = useState("");
 
   const params = paramsByMode[mode];
   const opps = oppsByMode[mode];
   const setParams = (np) => setParamsByMode((s) => ({ ...s, [mode]: np }));
   const setOpps = (no) => setOppsByMode((s) => ({ ...s, [mode]: no }));
 
-  /* load persisted */
   useEffect(() => {
     (async () => {
       try {
@@ -281,7 +284,6 @@ export default function App() {
     })();
   }, []);
 
-  /* persist */
   useEffect(() => {
     if (!loaded) return;
     (async () => { try { await store.set(`wh:opps:${mode}`, JSON.stringify(opps)); } catch (e) {} })();
@@ -303,6 +305,14 @@ export default function App() {
       .sort((a, b) => (ORDER[a.rec.action] ?? 9) - (ORDER[b.rec.action] ?? 9) || (b.cScore + b.eObj.score) - (a.cScore + a.eObj.score));
   }, [opps, params]);
 
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return scored;
+    return scored.filter((s) =>
+      s.o.name.toLowerCase().includes(q) || (s.o.city || "").toLowerCase().includes(q)
+    );
+  }, [scored, search]);
+
   const addOpp = (o) => { setOpps([normalizeOpp({ ...o, id: newId() }), ...opps]); setShowAdd(false); };
   const delOpp = (id) => {
     if (typeof window !== "undefined" && window.confirm && !window.confirm("Remove this opportunity from the pipeline?")) return;
@@ -316,125 +326,214 @@ export default function App() {
   return (
     <div style={{ ...ui, background: C.paper, color: C.ink, minHeight: "100vh" }}>
       <style>{FONTS}</style>
-      <div className="mx-auto" style={{ maxWidth: 1120, padding: "22px 18px 60px" }}>
 
-        {/* header */}
-        <div className="flex items-end justify-between flex-wrap" style={{ gap: 12, marginBottom: 16 }}>
-          <div className="flex items-center" style={{ gap: 12 }}>
-            <div style={{ width: 42, height: 42, borderRadius: 10, background: C.ink, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Anchor size={22} color={C.paper} strokeWidth={2} />
+      {/* ── TOP NAV ── */}
+      <header style={{ background: C.ink, position: "sticky", top: 0, zIndex: 50, boxShadow: "0 1px 0 rgba(255,255,255,0.07)" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 20px", display: "flex", alignItems: "center", height: 54, gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: C.accent, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <Anchor size={17} color="#fff" strokeWidth={2.2} />
             </div>
-            <div>
-              <div style={{ ...display, fontSize: 26, fontWeight: 700, letterSpacing: "-0.01em", lineHeight: 1 }}>Wheelhouse</div>
-              <div style={{ ...ui, fontSize: 12.5, color: C.muted, marginTop: 3 }}>Bar acquisition screener — all-in capital, dual-score, next action</div>
-            </div>
+            <span style={{ ...display, fontSize: 20, fontWeight: 700, color: C.paper, letterSpacing: "-0.01em" }}>Wheelhouse</span>
+            <span style={{ ...ui, fontSize: 12, color: "rgba(255,255,255,0.38)", marginLeft: 2 }}>Bar acquisition screener</span>
           </div>
-          <div className="flex" style={{ background: C.chipBg, borderRadius: 10, padding: 3 }}>
+          {/* mode toggle */}
+          <div style={{ display: "flex", background: "rgba(255,255,255,0.1)", borderRadius: 8, padding: 3, flexShrink: 0 }}>
             {[["boardwalk", "Boardwalk Thesis"], ["custom", "Custom Search"]].map(([id, label]) => (
-              <button key={id} onClick={() => { setMode(id); setExpanded(null); }}
-                style={{ ...ui, fontSize: 13, fontWeight: 600, padding: "7px 14px", borderRadius: 8, border: "none", cursor: "pointer",
-                  background: mode === id ? C.ink : "transparent", color: mode === id ? C.paper : C.muted }}>
+              <button key={id} onClick={() => { setMode(id); setExpanded(null); setSearch(""); }}
+                style={{ ...ui, fontSize: 13, fontWeight: 600, padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer",
+                  background: mode === id ? C.paper : "transparent",
+                  color: mode === id ? C.ink : "rgba(255,255,255,0.6)",
+                  transition: "background 0.15s, color 0.15s" }}>
                 {label}
               </button>
             ))}
           </div>
         </div>
+      </header>
+
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "20px 20px 60px" }}>
 
         {/* mode strap */}
-        <div style={{ background: mode === "boardwalk" ? C.navy : C.accent, color: C.paper, borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, lineHeight: 1.45 }}>
+        <div style={{
+          background: mode === "boardwalk" ? C.navy : C.accent,
+          color: "#fff", borderRadius: 10, padding: "10px 16px", marginBottom: 18, fontSize: 13, lineHeight: 1.5,
+        }}>
           {mode === "boardwalk"
-            ? "Pre-tuned to the project: $150k operator cash, SBA on, seller carry preferred, 80–120 cap, Type 47, beach-led. Seeded with the live shortlist so you can audit the model against the report."
-            : "Open mode: set your own capital, capacity, license, and concept priority, then paste or enter any listing to score it against your criteria."}
+            ? "Pre-tuned: $150k operator cash · SBA on · seller carry preferred · 80–120 cap · Type 47 · beach-led · seeded with the live shortlist."
+            : "Open mode: configure your own capital, capacity, license, and concept priority, then add any listing to screen it."}
         </div>
 
-        {/* control row */}
-        <div className="flex items-center flex-wrap" style={{ gap: 8, marginBottom: 14 }}>
-          <button onClick={() => setShowAdd(true)} style={btn(C.ink, C.paper)}><Plus size={15} /> Add opportunity</button>
-          <button onClick={() => setShowCriteria((s) => !s)} style={btn(C.card, C.ink, true)}><SlidersHorizontal size={15} /> Criteria</button>
-          <button onClick={resetSeed} style={btn(C.card, C.muted, true)}><RotateCcw size={14} /> Reset</button>
-          <div style={{ marginLeft: "auto", ...mono, fontSize: 12, color: C.muted }}>{scored.length} opportunities</div>
+        {/* ── CONTROLS ROW ── */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+          {/* search */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8,
+            background: "#fff", border: `1px solid ${C.line}`, borderRadius: 9,
+            padding: "0 12px", height: 38, flex: "1 1 200px", maxWidth: 320,
+          }}>
+            <Search size={14} color={C.muted} style={{ flexShrink: 0 }} />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name or city…"
+              style={{ ...ui, fontSize: 13, border: "none", outline: "none", flex: 1, background: "transparent", color: C.ink }}
+            />
+            {search && (
+              <button onClick={() => setSearch("")} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, display: "flex", alignItems: "center", padding: 0 }}>
+                <X size={13} />
+              </button>
+            )}
+          </div>
+
+          <button onClick={() => setShowCriteria((s) => !s)}
+            style={btn(showCriteria ? C.ink : C.card, showCriteria ? C.paper : C.ink, !showCriteria)}>
+            <SlidersHorizontal size={14} /> Criteria
+          </button>
+          <button onClick={resetSeed} style={btn(C.card, C.muted, true)}>
+            <RotateCcw size={14} /> Reset
+          </button>
+
+          {/* primary CTA — right side */}
+          <button onClick={() => setShowAdd(true)}
+            style={{ ...btn(C.accent, "#fff"), marginLeft: "auto", padding: "9px 20px", fontSize: 14, fontWeight: 700 }}>
+            <Plus size={16} /> Add Opportunity
+          </button>
         </div>
 
         {showCriteria && <Criteria params={params} setParams={setParams} mode={mode} />}
-        {showAdd && <AddForm onAdd={addOpp} onClose={() => setShowAdd(false)} />}
 
-        {/* pipeline */}
-        <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden", background: C.card }}>
-          <div className="flex items-center" style={{ ...mono, fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted, padding: "10px 14px", borderBottom: `1px solid ${C.line}`, gap: 8 }}>
-            <div style={{ flex: "2 1 0" }}>Target</div>
-            <div style={{ flex: "1 1 0", textAlign: "right" }}>Asking</div>
-            <div style={{ flex: "1.3 1 0", textAlign: "right" }}>All-in</div>
-            <div style={{ flex: "1.2 1 0", textAlign: "right" }}>Partner check</div>
-            <div style={{ flex: "0 0 84px", textAlign: "center" }}>Concept</div>
-            <div style={{ flex: "0 0 84px", textAlign: "center" }}>Econ</div>
-            <div style={{ flex: "1.6 1 0", textAlign: "right" }}>Action</div>
+        {/* ── PIPELINE TABLE ── */}
+        <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflowX: "auto", background: C.card }}>
+
+          {/* table header */}
+          <div style={{
+            display: "grid", gridTemplateColumns: GRID_COLS, gap: 8, alignItems: "center",
+            ...mono, fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted,
+            padding: "10px 16px", borderBottom: `1px solid ${C.line}`,
+          }}>
+            <div>Target</div>
+            <div style={{ textAlign: "right" }}>Asking</div>
+            <div style={{ textAlign: "right" }}>All-in range</div>
+            <div style={{ textAlign: "right" }}>Partner $</div>
+            <div style={{ textAlign: "center" }}>Concept</div>
+            <div style={{ textAlign: "center" }}>Econ</div>
+            <div style={{ textAlign: "right" }}>Action</div>
           </div>
-          {scored.length === 0 && (
-            <div style={{ padding: "34px 14px", textAlign: "center", color: C.muted, fontSize: 13.5 }}>
-              No opportunities yet. Click <b>Add opportunity</b> to paste a listing or enter one.
+
+          {filtered.length === 0 && (
+            <div style={{ padding: "40px 16px", textAlign: "center", color: C.muted, fontSize: 13.5 }}>
+              {search
+                ? `No results for "${search}" — try a different name or city.`
+                : "No opportunities yet. Click Add Opportunity to get started."}
             </div>
           )}
-          {scored.map((s) => (
-            <Row key={s.o.id} s={s} expanded={expanded === s.o.id}
-              onToggle={() => setExpanded(expanded === s.o.id ? null : s.o.id)} onDelete={() => delOpp(s.o.id)} />
+
+          {filtered.map((s) => (
+            <Row key={s.o.id} s={s}
+              expanded={expanded === s.o.id}
+              onToggle={() => setExpanded(expanded === s.o.id ? null : s.o.id)}
+              onDelete={() => delOpp(s.o.id)} />
           ))}
         </div>
 
-        <div style={{ ...ui, fontSize: 11.5, color: C.muted, marginTop: 14, lineHeight: 1.5 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 10 }}>
+          <span style={{ ...mono, fontSize: 11.5, color: C.muted }}>
+            {filtered.length}{filtered.length !== scored.length ? ` of ${scored.length}` : ""} {filtered.length === 1 ? "opportunity" : "opportunities"}
+          </span>
+        </div>
+
+        <div style={{ ...ui, fontSize: 11.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>
           Estimates from a parametric sources-and-uses model, not quotes. Scores support judgment; they do not replace broker calls,
-          financial diligence, ABC/CUP verification, or lease review. All-in ranges assume {Math.round((1 - params.negLow) * 100)}–0% off ask,
-          {params.useSBA ? ` SBA debt ≈ ${Math.round(params.sbaPct * 100)}% of purchase,` : " no SBA debt,"}
-          {params.sellerCarry !== "none" ? ` seller carry ≈ ${Math.round(params.carryPct * 100)}% where available.` : " no seller carry."}
+          financial diligence, ABC/CUP verification, or lease review. All-in ranges assume {Math.round((1 - params.negLow) * 100)}–0% off ask
+          {params.useSBA ? `, SBA debt ≈ ${Math.round(params.sbaPct * 100)}% of purchase` : ", no SBA debt"}
+          {params.sellerCarry !== "none" ? `, seller carry ≈ ${Math.round(params.carryPct * 100)}% where available.` : ", no seller carry."}
         </div>
       </div>
+
+      {/* ── ADD OPPORTUNITY MODAL ── */}
+      {showAdd && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(22,36,46,0.6)",
+            zIndex: 100, overflowY: "auto", padding: "32px 16px",
+            display: "flex", alignItems: "flex-start", justifyContent: "center",
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowAdd(false); }}
+        >
+          <div style={{ width: "100%", maxWidth: 700 }}>
+            <AddForm onAdd={addOpp} onClose={() => setShowAdd(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+/* ── shared button style ── */
 function btn(bg, fg, border) {
-  return { ...ui, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600,
-    padding: "8px 13px", borderRadius: 9, cursor: "pointer", background: bg, color: fg,
-    border: border ? `1px solid ${C.line}` : "none" };
+  return {
+    ...ui, display: "inline-flex", alignItems: "center", gap: 6,
+    fontSize: 13, fontWeight: 600, padding: "8px 14px", borderRadius: 9,
+    cursor: "pointer", background: bg, color: fg,
+    border: border ? `1px solid ${C.line}` : "none",
+  };
 }
 
-/* ---------------------- score dot ---------------------- */
+/* ── score dot ── */
 function Score({ v, conf }) {
   const col = v >= 3.8 ? C.green : v >= 3 ? C.accent : v >= 2.5 ? C.amber : C.red;
   return (
-    <div className="flex items-center justify-center" style={{ gap: 5 }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
       <span style={{ ...mono, fontSize: 13, fontWeight: 600, color: col }}>{v.toFixed(1)}</span>
-      {conf === "low" && <AlertCircle size={12} color={C.amber} />}
+      {conf === "low" && <AlertCircle size={11} color={C.amber} />}
     </div>
   );
 }
 
-/* ---------------------- pipeline row ---------------------- */
+/* ── pipeline row ── */
 function Row({ s, expanded, onToggle, onDelete }) {
   const { o, fin, cScore, eObj, rec, flags } = s;
   const tone = TONE_COLOR[rec.tone];
   return (
     <div style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
-      <div onClick={onToggle} className="flex items-center" style={{ padding: "11px 14px", gap: 8, cursor: "pointer" }}>
-        <div style={{ flex: "2 1 0", display: "flex", alignItems: "center", gap: 7 }}>
-          {expanded ? <ChevronDown size={15} color={C.muted} /> : <ChevronRight size={15} color={C.muted} />}
-          <div>
-            <div style={{ ...ui, fontSize: 14, fontWeight: 600 }}>{o.name}</div>
+      {/* summary */}
+      <div
+        onClick={onToggle}
+        style={{ display: "grid", gridTemplateColumns: GRID_COLS, gap: 8, padding: "12px 16px", alignItems: "center", cursor: "pointer" }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = C.lineSoft; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+      >
+        {/* name + city */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ color: C.muted, flexShrink: 0 }}>
+            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ ...ui, fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.name}</div>
             <div style={{ ...ui, fontSize: 11.5, color: C.muted }}>{o.city}</div>
           </div>
         </div>
-        <div style={{ flex: "1 1 0", textAlign: "right", ...mono, fontSize: 13 }}>{m(Number(o.asking))}</div>
-        <div style={{ flex: "1.3 1 0", textAlign: "right", ...mono, fontSize: 13 }}>{fin ? rangeM(fin.allLo, fin.allHi) : "—"}</div>
-        <div style={{ flex: "1.2 1 0", textAlign: "right", ...mono, fontSize: 13 }}>{fin ? rangeK(fin.checkLo, fin.checkHi) : "—"}</div>
-        <div style={{ flex: "0 0 84px" }}><Score v={cScore} /></div>
-        <div style={{ flex: "0 0 84px" }}><Score v={eObj.score} conf={eObj.conf} /></div>
-        <div style={{ flex: "1.6 1 0", textAlign: "right" }}>
-          <span style={{ ...ui, fontSize: 11.5, fontWeight: 600, color: "#fff", background: tone, padding: "4px 9px", borderRadius: 20, whiteSpace: "nowrap" }}>{rec.action}</span>
+
+        <div style={{ ...mono, fontSize: 13, textAlign: "right" }}>{m(Number(o.asking))}</div>
+        <div style={{ ...mono, fontSize: 12.5, textAlign: "right", color: C.muted }}>{fin ? rangeM(fin.allLo, fin.allHi) : "—"}</div>
+        <div style={{ ...mono, fontSize: 13, textAlign: "right" }}>{fin ? rangeK(fin.checkLo, fin.checkHi) : "—"}</div>
+        <div><Score v={cScore} /></div>
+        <div><Score v={eObj.score} conf={eObj.conf} /></div>
+        <div style={{ textAlign: "right" }}>
+          <span style={{
+            ...ui, fontSize: 11.5, fontWeight: 600, color: "#fff", background: tone,
+            padding: "4px 10px", borderRadius: 20, whiteSpace: "nowrap", display: "inline-block",
+          }}>
+            {rec.action}
+          </span>
         </div>
       </div>
 
+      {/* expanded detail */}
       {expanded && (
-        <div style={{ padding: "4px 18px 20px 36px", background: "#fff" }}>
-          <div className="flex flex-wrap" style={{ gap: 24 }}>
+        <div style={{ padding: "4px 20px 20px 44px", background: "#fff", borderTop: `1px solid ${C.lineSoft}` }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
             {/* sources & uses */}
             <div style={{ flex: "1 1 320px", minWidth: 280 }}>
               <Hd>Sources & uses (estimated)</Hd>
@@ -470,11 +569,14 @@ function Row({ s, expanded, onToggle, onDelete }) {
               <Hd>Read</Hd>
               <div style={{ ...ui, fontSize: 12.5, lineHeight: 1.55, marginBottom: 10 }}>
                 <div>Concept fit <b>{cScore.toFixed(1)}</b> · Economics <b>{eObj.score.toFixed(1)}</b>
-                  {eObj.mult ? <> · {eObj.mult.toFixed(1)}x SDE</> : ""}</div>
+                  {eObj.mult ? <> · {eObj.mult.toFixed(1)}x SDE</> : ""}
+                </div>
                 {eObj.note && <div style={{ color: C.amber, marginTop: 3 }}>{eObj.note}</div>}
-                <div style={{ marginTop: 3 }}>License: {o.licenseType === "unknown" || !o.licenseType ? "verify with ABC" : "Type " + o.licenseType}
-                  {" · "}Capacity: {o.capacity ? o.capacity : "unknown"}
-                  {" · "}Lease: {o.leaseYears ? o.leaseYears + " yr" : "unknown"}</div>
+                <div style={{ marginTop: 3 }}>
+                  License: {o.licenseType === "unknown" || !o.licenseType ? "verify with ABC" : "Type " + o.licenseType}
+                  {" · "}Capacity: {o.capacity || "unknown"}
+                  {" · "}Lease: {o.leaseYears ? o.leaseYears + " yr" : "unknown"}
+                </div>
                 {o.notes && <div style={{ color: C.muted, marginTop: 4, fontStyle: "italic" }}>{o.notes}</div>}
               </div>
               <Hd>Diligence gates</Hd>
@@ -485,13 +587,15 @@ function Row({ s, expanded, onToggle, onDelete }) {
               <ul style={{ margin: 0, paddingLeft: 16, ...ui, fontSize: 12, lineHeight: 1.5, color: C.muted }}>
                 {BROKER_QS.map((q, i) => <li key={i} style={{ marginBottom: 2 }}>{q}</li>)}
               </ul>
-              <div className="flex items-center" style={{ gap: 14, marginTop: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 12 }}>
                 {o.sourceUrl && (
-                  <a href={o.sourceUrl} target="_blank" rel="noreferrer" style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.accent, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
+                  <a href={o.sourceUrl} target="_blank" rel="noreferrer"
+                    style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.accent, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
                     <ExternalLink size={13} /> View listing
                   </a>
                 )}
-                <button onClick={onDelete} style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.red, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
+                <button onClick={onDelete}
+                  style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.red, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
                   <Trash2 size={13} /> Remove
                 </button>
               </div>
@@ -503,20 +607,24 @@ function Row({ s, expanded, onToggle, onDelete }) {
   );
 }
 
-const Hd = ({ children }) => <div style={{ ...mono, fontSize: 10, letterSpacing: "0.07em", textTransform: "uppercase", color: C.muted, marginBottom: 6 }}>{children}</div>;
+const Hd = ({ children }) => (
+  <div style={{ ...mono, fontSize: 10, letterSpacing: "0.07em", textTransform: "uppercase", color: C.muted, marginBottom: 6 }}>
+    {children}
+  </div>
+);
 const Note = ({ children }) => <div style={{ ...ui, fontSize: 12.5, color: C.muted }}>{children}</div>;
 
-/* ---------------------- criteria panel ---------------------- */
+/* ── criteria panel ── */
 function Criteria({ params, setParams, mode }) {
   const set = (key, val) => setParams({ ...params, [key]: val });
   const num = (v) => (v === "" ? 0 : Number(v));
   return (
-    <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, background: C.card, padding: "14px 16px", marginBottom: 14 }}>
-      <div className="flex flex-wrap" style={{ gap: 18 }}>
+    <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, background: C.card, padding: "16px", marginBottom: 16 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
         <Field label="Operator cash"><MoneyIn v={params.operatorCash} on={(x) => set("operatorCash", num(x))} /></Field>
         <Field label="Max partner check"><MoneyIn v={params.maxPartnerCheck} on={(x) => set("maxPartnerCheck", num(x))} /></Field>
         <Field label="Target capacity">
-          <div className="flex items-center" style={{ gap: 5 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <SmallNum v={params.capLow} on={(x) => set("capLow", num(x))} />
             <span style={{ color: C.muted }}>–</span>
             <SmallNum v={params.capHigh} on={(x) => set("capHigh", num(x))} />
@@ -545,42 +653,51 @@ const Field = ({ label, children }) => (
     {children}
   </div>
 );
+
 function MoneyIn({ v, on }) {
   return (
-    <div className="flex items-center" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 8px" }}>
+    <div style={{ display: "flex", alignItems: "center", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 8px" }}>
       <span style={{ ...mono, fontSize: 12, color: C.muted }}>$</span>
       <input value={v} onChange={(e) => on(e.target.value.replace(/[^0-9]/g, ""))}
         style={{ ...mono, fontSize: 12.5, border: "none", outline: "none", width: 78, background: "transparent", color: C.ink }} />
     </div>
   );
 }
+
 function SmallNum({ v, on }) {
-  return <input value={v} onChange={(e) => on(e.target.value.replace(/[^0-9]/g, ""))}
-    style={{ ...mono, fontSize: 12.5, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 7px", width: 48, background: "#fff", outline: "none", color: C.ink, textAlign: "center" }} />;
+  return (
+    <input value={v} onChange={(e) => on(e.target.value.replace(/[^0-9]/g, ""))}
+      style={{ ...mono, fontSize: 12.5, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 7px", width: 48, background: "#fff", outline: "none", color: C.ink, textAlign: "center" }} />
+  );
 }
+
 function Seg({ opts, v, on }) {
   return (
-    <div className="flex" style={{ background: C.chipBg, borderRadius: 8, padding: 2 }}>
+    <div style={{ display: "flex", background: C.chipBg, borderRadius: 8, padding: 2 }}>
       {opts.map(([val, label]) => (
         <button key={String(val)} onClick={() => on(val)}
           style={{ ...ui, fontSize: 12, fontWeight: 600, padding: "5px 9px", borderRadius: 6, border: "none", cursor: "pointer",
-            background: v === val ? C.ink : "transparent", color: v === val ? C.paper : C.muted }}>{label}</button>
+            background: v === val ? C.ink : "transparent", color: v === val ? C.paper : C.muted }}>
+          {label}
+        </button>
       ))}
     </div>
   );
 }
 
-/* ---------------------- add form (with optional AI parse) ---------------------- */
-const BLANK = { name: "", city: "", asking: "", sqft: "", capacity: "", licenseType: "unknown",
+/* ── add form (modal) ── */
+const BLANK = {
+  name: "", city: "", asking: "", sqft: "", capacity: "", licenseType: "unknown",
   rentMonthly: "", leaseYears: "", sde: "", revenue: "", sellerFinancing: "false",
-  conceptChange: "light", beachProximity: "unknown", kitchen: "true", sourceUrl: "", notes: "" };
+  conceptChange: "light", beachProximity: "unknown", kitchen: "true", sourceUrl: "", notes: "",
+};
 
 function AddForm({ onAdd, onClose }) {
   const [f, setF] = useState(BLANK);
   const [blurb, setBlurb] = useState("");
   const [parsing, setParsing] = useState(false);
   const [perr, setPerr] = useState(null);
-  const set = (key, val) => setF({ ...f, [key]: val });
+  const set = (key, val) => setF((prev) => ({ ...prev, [key]: val }));
 
   const parse = async () => {
     if (!blurb.trim()) return;
@@ -602,7 +719,7 @@ function AddForm({ onAdd, onClose }) {
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514", max_tokens: 1000,
           messages: [{ role: "user", content:
-            `Extract structured data from this business-for-sale listing. Return ONLY valid JSON, no markdown, no prose. Keys: name (string), city (string), asking (number USD or null), sqft (number or null), capacity (number or null), licenseType ("47"|"48"|"unknown"), rentMonthly (number/mo or null), leaseYears (number or null), sde (number or null), revenue (number or null), sellerFinancing (true|false), conceptChange ("none"|"light"|"moderate"|"heavy" — heavy if buyer must fully re-concept e.g. sushi to bar), beachProximity ("on"|"adjacent"|"inland"|"unknown"), kitchen (true|false), notes (short string).\n\nLISTING:\n${blurb}` }],
+            `Extract structured data from this business-for-sale listing. Return ONLY valid JSON, no markdown, no prose. Keys: name (string), city (string), asking (number USD or null), sqft (number or null), capacity (number or null), licenseType ("47"|"48"|"unknown"), rentMonthly (number/mo or null), leaseYears (number or null), sde (number or null), revenue (number or null), sellerFinancing (true|false), conceptChange ("none"|"light"|"moderate"|"heavy"), beachProximity ("on"|"adjacent"|"inland"|"unknown"), kitchen (true|false), notes (short string).\n\nLISTING:\n${blurb}` }],
         }),
       });
       const data = await res.json();
@@ -624,7 +741,7 @@ function AddForm({ onAdd, onClose }) {
   };
 
   const submit = () => {
-    if (!f.name) return;
+    if (!f.name.trim()) return;
     onAdd({
       ...f,
       asking: f.asking === "" ? null : Number(f.asking),
@@ -640,25 +757,39 @@ function AddForm({ onAdd, onClose }) {
   };
 
   return (
-    <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, background: C.card, padding: "16px 16px", marginBottom: 14, position: "relative" }}>
-      <button onClick={onClose} style={{ position: "absolute", top: 12, right: 12, background: "none", border: "none", cursor: "pointer", color: C.muted }}><X size={18} /></button>
-
-      {/* AI parse */}
-      <Hd>Paste a listing (optional AI parse)</Hd>
-      <textarea value={blurb} onChange={(e) => setBlurb(e.target.value)} rows={3}
-        placeholder="Paste a broker blurb / listing text, then Parse — or just fill the fields below."
-        style={{ ...ui, fontSize: 12.5, width: "100%", border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 10px", outline: "none", resize: "vertical", background: "#fff", color: C.ink, boxSizing: "border-box" }} />
-      <div className="flex items-center" style={{ gap: 10, margin: "8px 0 16px" }}>
-        <button onClick={parse} disabled={parsing} style={{ ...btn(C.accent, "#fff"), opacity: parsing ? 0.6 : 1 }}>
-          <Sparkles size={14} /> {parsing ? "Parsing…" : "Parse with AI"}
+    <div style={{ border: `1px solid ${C.line}`, borderRadius: 14, background: C.card, padding: "22px 22px 20px", boxShadow: "0 24px 64px rgba(22,36,46,0.28)" }}>
+      {/* modal header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+        <div style={{ ...display, fontSize: 20, fontWeight: 600 }}>Add Opportunity</div>
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, display: "flex", alignItems: "center" }}>
+          <X size={20} />
         </button>
-        {perr && <span style={{ ...ui, fontSize: 12, color: C.amber }}>{perr}</span>}
       </div>
 
-      <Hd>Fields</Hd>
-      <div className="flex flex-wrap" style={{ gap: 12 }}>
-        <In label="Name *" v={f.name} on={(x) => set("name", x)} w={180} />
-        <In label="City / area" v={f.city} on={(x) => set("city", x)} w={150} />
+      {/* AI parse section */}
+      <div style={{ background: `${C.accent}14`, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: "14px 16px", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+          <Sparkles size={14} color={C.accent} />
+          <span style={{ ...ui, fontSize: 11.5, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: "0.06em" }}>AI Parse</span>
+          <span style={{ ...ui, fontSize: 12, color: C.muted, marginLeft: 4 }}>— paste a broker blurb to auto-fill the fields below</span>
+        </div>
+        <textarea value={blurb} onChange={(e) => setBlurb(e.target.value)} rows={3}
+          placeholder="Paste listing text here…"
+          style={{ ...ui, fontSize: 13, width: "100%", border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", outline: "none", resize: "vertical", background: "#fff", color: C.ink, boxSizing: "border-box", marginBottom: 10 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={parse} disabled={parsing || !blurb.trim()}
+            style={{ ...btn(C.accent, "#fff"), opacity: (parsing || !blurb.trim()) ? 0.5 : 1 }}>
+            <Sparkles size={14} /> {parsing ? "Parsing…" : "Parse with AI"}
+          </button>
+          {perr && <span style={{ ...ui, fontSize: 12, color: C.amber }}>{perr}</span>}
+        </div>
+      </div>
+
+      {/* fields */}
+      <Hd>Listing details</Hd>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+        <In label="Name *" v={f.name} on={(x) => set("name", x)} w={200} />
+        <In label="City / area" v={f.city} on={(x) => set("city", x)} w={160} />
         <In label="Asking $" v={f.asking} on={(x) => set("asking", x.replace(/[^0-9]/g, ""))} w={110} mono />
         <In label="Sq ft" v={f.sqft} on={(x) => set("sqft", x.replace(/[^0-9]/g, ""))} w={80} mono />
         <In label="Capacity" v={f.capacity} on={(x) => set("capacity", x.replace(/[^0-9]/g, ""))} w={80} mono />
@@ -666,20 +797,28 @@ function AddForm({ onAdd, onClose }) {
         <In label="Lease yrs" v={f.leaseYears} on={(x) => set("leaseYears", x.replace(/[^0-9]/g, ""))} w={80} mono />
         <In label="SDE $" v={f.sde} on={(x) => set("sde", x.replace(/[^0-9]/g, ""))} w={110} mono />
         <In label="Revenue $" v={f.revenue} on={(x) => set("revenue", x.replace(/[^0-9]/g, ""))} w={120} mono />
-        <In label="Source URL" v={f.sourceUrl} on={(x) => set("sourceUrl", x)} w={240} />
       </div>
-      <div className="flex flex-wrap" style={{ gap: 18, marginTop: 14 }}>
+      <div style={{ marginBottom: 14 }}>
+        <In label="Source URL" v={f.sourceUrl} on={(x) => set("sourceUrl", x)} w="100%" />
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 18, marginBottom: 16 }}>
         <Field label="License"><Seg opts={[["47", "47"], ["48", "48"], ["unknown", "?"]]} v={f.licenseType} on={(x) => set("licenseType", x)} /></Field>
         <Field label="Beach"><Seg opts={[["on", "On"], ["adjacent", "Adj."], ["inland", "Inland"], ["unknown", "?"]]} v={f.beachProximity} on={(x) => set("beachProximity", x)} /></Field>
         <Field label="Concept change"><Seg opts={[["none", "None"], ["light", "Light"], ["moderate", "Mod."], ["heavy", "Heavy"]]} v={f.conceptChange} on={(x) => set("conceptChange", x)} /></Field>
         <Field label="Kitchen"><Seg opts={[["true", "Yes"], ["false", "No"]]} v={f.kitchen} on={(x) => set("kitchen", x)} /></Field>
         <Field label="Seller carry"><Seg opts={[["true", "Yes"], ["false", "No"]]} v={f.sellerFinancing} on={(x) => set("sellerFinancing", x)} /></Field>
       </div>
-      <div style={{ marginTop: 14 }}>
-        <In label="Notes" v={f.notes} on={(x) => set("notes", x)} w={"100%"} />
+
+      <div style={{ marginBottom: 18 }}>
+        <In label="Notes" v={f.notes} on={(x) => set("notes", x)} w="100%" />
       </div>
-      <div className="flex" style={{ gap: 8, marginTop: 16 }}>
-        <button onClick={submit} style={btn(C.ink, C.paper)}><Plus size={15} /> Add to pipeline</button>
+
+      <div style={{ display: "flex", gap: 8, paddingTop: 16, borderTop: `1px solid ${C.line}` }}>
+        <button onClick={submit} disabled={!f.name.trim()}
+          style={{ ...btn(C.ink, C.paper), padding: "10px 22px", fontSize: 14, opacity: f.name.trim() ? 1 : 0.45 }}>
+          <Plus size={15} /> Add to pipeline
+        </button>
         <button onClick={onClose} style={btn(C.card, C.muted, true)}>Cancel</button>
       </div>
     </div>
@@ -691,7 +830,7 @@ function In({ label, v, on, w, mono: isMono }) {
     <div style={{ width: w === "100%" ? "100%" : w }}>
       <div style={{ ...mono, fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted, marginBottom: 4 }}>{label}</div>
       <input value={v} onChange={(e) => on(e.target.value)}
-        style={{ ...(isMono ? mono : ui), fontSize: 12.5, width: "100%", border: `1px solid ${C.line}`, borderRadius: 7, padding: "6px 9px", outline: "none", background: "#fff", color: C.ink, boxSizing: "border-box" }} />
+        style={{ ...(isMono ? mono : ui), fontSize: 12.5, width: "100%", border: `1px solid ${C.line}`, borderRadius: 7, padding: "7px 10px", outline: "none", background: "#fff", color: C.ink, boxSizing: "border-box" }} />
     </div>
   );
 }
