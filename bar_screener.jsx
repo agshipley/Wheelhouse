@@ -584,10 +584,21 @@ function AddForm({ onAdd, onClose }) {
 
   const parse = async () => {
     if (!blurb.trim()) return;
+    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      setPerr("Set VITE_ANTHROPIC_API_KEY in your Railway environment variables.");
+      return;
+    }
     setParsing(true); setPerr(null);
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514", max_tokens: 1000,
           messages: [{ role: "user", content:
@@ -607,7 +618,7 @@ function AddForm({ onAdd, onClose }) {
         kitchen: String(j.kitchen ?? true), sourceUrl: "", notes: j.notes || "",
       });
     } catch (e) {
-      setPerr("Couldn't parse — AI parse runs inside the Claude.ai artifact runtime (or your own API proxy with a key). Fill the fields in manually below.");
+      setPerr("Couldn't parse listing — check your API key or fill the fields in manually below.");
     }
     setParsing(false);
   };
