@@ -295,7 +295,11 @@ export default function App() {
   const params = paramsByMode[mode];
   const opps = oppsByMode[mode];
   const setParams = (np) => setParamsByMode((s) => ({ ...s, [mode]: np }));
-  const setOpps = (no) => setOppsByMode((s) => ({ ...s, [mode]: no }));
+  const setOpps = (update) =>
+    setOppsByMode((s) => ({
+      ...s,
+      [mode]: typeof update === "function" ? update(s[mode] ?? []) : update,
+    }));
 
   useEffect(() => {
     (async () => {
