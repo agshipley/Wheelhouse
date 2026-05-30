@@ -445,7 +445,7 @@ export default function App() {
       const { result, error } = await res.json();
       if (error) throw new Error(error);
       const j = result;
-      setEditingInitial(normalizeOpp({
+      const merged = normalizeOpp({
         ...opp,
         ...(j.name && { name: j.name }),
         ...(j.city && { city: j.city }),
@@ -462,8 +462,9 @@ export default function App() {
         ...(j.beachProximity && j.beachProximity !== "unknown" && { beachProximity: j.beachProximity }),
         ...(j.kitchen != null && { kitchen: j.kitchen }),
         ...(j.notes && { notes: j.notes }),
-      }));
-      setEditing(opp.id);
+      });
+      await supabase.from("opportunities").update(oppToRow(merged, mode)).eq("id", merged.id);
+      setOpps((prev) => prev.map((o) => (o.id === merged.id ? merged : o)));
     } catch (e) {
       setRecheckErr((prev) => ({ ...prev, [opp.id]: e.message || "Re-check failed" }));
     }
