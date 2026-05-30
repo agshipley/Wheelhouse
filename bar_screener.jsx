@@ -31,6 +31,14 @@ const ui = { fontFamily: "'Archivo', system-ui, sans-serif" };
 const mono = { fontFamily: "'IBM Plex Mono', ui-monospace, monospace" };
 
 /* ---------------------- helpers ---------------------- */
+// Returns true if the URL looks like a direct listing permalink vs a search/category page
+function isDirectListingUrl(url) {
+  if (!url) return false;
+  return /\/\d{5,}\/?$/.test(url) ||   // BizBuySell: ends in numeric ID
+         /\/BW\d+/.test(url) ||          // BizQuest: BW + number
+         /-\d{4,}\.php/.test(url) ||     // BizBen: -number.php
+         /\/OF\d+/.test(url);            // OpenFair: OF + number
+}
 const k = (n) => (n == null ? "—" : "$" + Math.round(n / 1000) + "k");
 const m = (n) =>
   n == null ? "—" : n >= 1000000 ? "$" + (n / 1000000).toFixed(2).replace(/0$/, "") + "M" : k(n);
@@ -908,7 +916,7 @@ function Row({ s, expanded, onToggle, onDelete, onEdit, onRecheck, isRechecking,
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     <a href={o.sourceUrl} target="_blank" rel="noreferrer"
                       style={{ ...ui, fontSize: 12, fontWeight: 600, color: linkBad ? C.red : C.accent, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
-                      <ExternalLink size={13} /> View listing
+                      <ExternalLink size={13} /> {isDirectListingUrl(o.sourceUrl) ? "View listing" : "Source page"}
                     </a>
                     {linkBad && (
                       <span style={{ ...mono, fontSize: 10, color: C.red }}>

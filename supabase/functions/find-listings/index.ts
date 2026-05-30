@@ -63,7 +63,7 @@ For each listing found, call the add_listing tool. Use at most 5 web searches to
 
 DATA ACCURACY RULES:
 - asking: only populate if the asking price is explicitly stated for this specific listing. If it appears in a search snippet but you are not certain it belongs to this listing, leave it null. Do not guess or infer.
-- sourceUrl: this must be the direct permalink URL for the individual listing — the URL shown on the listing card itself (e.g. bizbuysell.com/business-opportunity/some-name/1234567/). Never use the search page URL you used to find it. If you cannot identify a direct listing URL, omit sourceUrl.
+- sourceUrl: prefer the direct permalink to the individual listing (e.g. bizbuysell.com/business-opportunity/some-name/1234567/). If you cannot find the direct listing URL, provide the search page URL you used to find it — always include some URL rather than omitting it.
 - All other fields: leave null if not explicitly stated. Do not infer or estimate.
 
 Field guidance:
