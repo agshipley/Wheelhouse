@@ -62,6 +62,7 @@ const SYSTEM_PROMPT = `You are a bar acquisition researcher. Search BizBuySell.c
 For each listing found, call the add_listing tool. Use at most 5 web searches total, then stop — do not write a summary or explanation.
 
 DATA ACCURACY RULES:
+- Skip any listing whose page shows it is inactive, sold, in escrow, off-market, or otherwise no longer available. These appear frequently in search results due to stale index caches. Do not add them.
 - asking: only populate if the asking price is explicitly stated for this specific listing. If it appears in a search snippet but you are not certain it belongs to this listing, leave it null. Do not guess or infer.
 - sourceUrl: prefer the direct permalink to the individual listing (e.g. bizbuysell.com/business-opportunity/some-name/1234567/). If you cannot find the direct listing URL, provide the search page URL you used to find it — always include some URL rather than omitting it.
 - All other fields: leave null if not explicitly stated. Do not infer or estimate.
