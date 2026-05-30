@@ -67,7 +67,14 @@ Use null for any field not explicitly stated in the listing.`;
           .map((b) => b.text)
           .join("\n");
         const clean = txt.replace(/```json\n?/g, "").replace(/```/g, "").trim();
-        result = JSON.parse(clean);
+        // Try direct parse, then fall back to finding the JSON object in the text
+        try {
+          result = JSON.parse(clean);
+        } catch {
+          const match = clean.match(/\{[\s\S]*\}/);
+          if (!match) throw new Error("No JSON object found in response");
+          result = JSON.parse(match[0]);
+        }
         break;
       }
 

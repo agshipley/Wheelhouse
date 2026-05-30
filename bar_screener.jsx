@@ -304,6 +304,7 @@ export default function App() {
   const [editing, setEditing] = useState(null);
   const [editingInitial, setEditingInitial] = useState(null);
   const [rechecking, setRechecking] = useState(null);
+  const [recheckErr, setRecheckErr] = useState({});
 
   const params = paramsByMode[mode];
   const opps = oppsByMode[mode];
@@ -431,6 +432,7 @@ export default function App() {
 
   const recheck = async (opp) => {
     setRechecking(opp.id);
+    setRecheckErr((prev) => { const n = { ...prev }; delete n[opp.id]; return n; });
     try {
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/recheck-listing`, {
         method: "POST",
@@ -461,10 +463,10 @@ export default function App() {
         ...(j.kitchen != null && { kitchen: j.kitchen }),
         ...(j.notes && { notes: j.notes }),
       }));
-    } catch (_e) {
-      setEditingInitial(null); // fall back to unmodified data
+      setEditing(opp.id);
+    } catch (e) {
+      setRecheckErr((prev) => ({ ...prev, [opp.id]: e.message || "Re-check failed" }));
     }
-    setEditing(opp.id);
     setRechecking(null);
   };
 
@@ -729,6 +731,7 @@ export default function App() {
               onEdit={() => { setEditingInitial(null); setEditing(s.o.id); }}
               onRecheck={() => recheck(s.o)}
               isRechecking={rechecking === s.o.id}
+              recheckErr={recheckErr[s.o.id] ?? null}
               linkInfo={linkStatus?.[s.o.id] ?? null} />
           ))}
         </div>
@@ -807,7 +810,7 @@ function Score({ v, conf }) {
 }
 
 /* ── pipeline row ── */
-function Row({ s, expanded, onToggle, onDelete, onEdit, onRecheck, isRechecking, linkInfo }) {
+function Row({ s, expanded, onToggle, onDelete, onEdit, onRecheck, isRechecking, recheckErr, linkInfo }) {
   const { o, fin, cScore, eObj, rec, flags } = s;
   const tone = TONE_COLOR[rec.tone];
   const linkBad = linkInfo?.ok === false;
@@ -932,11 +935,14 @@ function Row({ s, expanded, onToggle, onDelete, onEdit, onRecheck, isRechecking,
                 )}
                 <div style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
                   {o.sourceUrl && (
-                    <button onClick={onRecheck} disabled={isRechecking}
-                      style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.muted, background: "none", border: "none", cursor: isRechecking ? "default" : "pointer", display: "inline-flex", alignItems: "center", gap: 4, opacity: isRechecking ? 0.6 : 1 }}>
-                      <RefreshCw size={13} style={isRechecking ? { animation: "spin 1s linear infinite" } : {}} />
-                      {isRechecking ? "Re-checking…" : "Re-check"}
-                    </button>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                      <button onClick={onRecheck} disabled={isRechecking}
+                        style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.muted, background: "none", border: "none", cursor: isRechecking ? "default" : "pointer", display: "inline-flex", alignItems: "center", gap: 4, opacity: isRechecking ? 0.6 : 1 }}>
+                        <RefreshCw size={13} style={isRechecking ? { animation: "spin 1s linear infinite" } : {}} />
+                        {isRechecking ? "Re-checking…" : "Re-check"}
+                      </button>
+                      {recheckErr && <span style={{ ...mono, fontSize: 10, color: C.red }}>{recheckErr}</span>}
+                    </div>
                   )}
                   <button onClick={onEdit}
                     style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.accent, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
