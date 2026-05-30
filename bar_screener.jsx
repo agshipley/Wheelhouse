@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import {
   Anchor, Plus, Trash2, ChevronDown, ChevronRight, Sparkles,
-  SlidersHorizontal, RotateCcw, ExternalLink, AlertCircle, X, Search,
+  SlidersHorizontal, RotateCcw, ExternalLink, AlertCircle, X, Search, Link2Off, Pencil,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 
@@ -290,7 +290,10 @@ export default function App() {
   const [findStatus, setFindStatus] = useState(null);
   const [expanded, setExpanded] = useState(null);
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState({ col: "action", dir: "asc" });
+  const [sortBy, setSortBy] = useState({ col: "action", dir: "asc", col2: null, dir2: "asc" });
+  const [linkStatus, setLinkStatus] = useState(null); // null = unchecked; map of id → { ok, status, error? }
+  const [checkingLinks, setCheckingLinks] = useState(false);
+  const [editing, setEditing] = useState(null);
 
   const params = paramsByMode[mode];
   const opps = oppsByMode[mode];
@@ -354,41 +357,65 @@ export default function App() {
   }, [scored, search]);
 
   const visibleOpps = useMemo(() => {
-    const { col, dir } = sortBy;
-    if (col === "action") return filtered; // default: scoring-engine order
-    const d = dir === "asc" ? 1 : -1;
-    const num = (a, b) => {
-      if (a == null && b == null) return 0;
-      if (a == null) return 1;
-      if (b == null) return -1;
-      return d * (a - b);
+    const { col, dir, col2, dir2 } = sortBy;
+    if (col === "action") return filtered;
+
+    const makeCmp = (c, d) => {
+      const sign = d === "asc" ? 1 : -1;
+      const num = (a, b) => {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return sign * (a - b);
+      };
+      return (a, b) => {
+        switch (c) {
+          case "name":    return sign * (a.o.name || "").localeCompare(b.o.name || "");
+          case "city":    return sign * (a.o.city || "").localeCompare(b.o.city || "");
+          case "date":    return num(
+            a.o.createdAt ? new Date(a.o.createdAt).getTime() : 0,
+            b.o.createdAt ? new Date(b.o.createdAt).getTime() : 0
+          );
+          case "asking":  return num(a.o.asking, b.o.asking);
+          case "allin":   return num(a.fin?.allLo, b.fin?.allLo);
+          case "partner": return num(a.fin?.checkLo, b.fin?.checkLo);
+          case "concept": return num(a.cScore, b.cScore);
+          case "econ":    return num(a.eObj.score, b.eObj.score);
+          default:        return 0;
+        }
+      };
     };
+
+    const cmp1 = makeCmp(col, dir);
+    const cmp2 = col2 ? makeCmp(col2, dir2) : null;
     return [...filtered].sort((a, b) => {
-      switch (col) {
-        case "name":    return d * (a.o.name || "").localeCompare(b.o.name || "");
-      case "city":    return d * (a.o.city || "").localeCompare(b.o.city || "");
-      case "date":    return num(
-        a.o.createdAt ? new Date(a.o.createdAt).getTime() : 0,
-        b.o.createdAt ? new Date(b.o.createdAt).getTime() : 0
-      );
-        case "asking":  return num(a.o.asking, b.o.asking);
-        case "allin":   return num(a.fin?.allLo, b.fin?.allLo);
-        case "partner": return num(a.fin?.checkLo, b.fin?.checkLo);
-        case "concept": return num(a.cScore, b.cScore);
-        case "econ":    return num(a.eObj.score, b.eObj.score);
-        default:        return 0;
-      }
+      const r = cmp1(a, b);
+      return r !== 0 || !cmp2 ? r : cmp2(a, b);
     });
   }, [filtered, sortBy]);
 
-  const handleSort = (col) =>
-    setSortBy((prev) => ({ col, dir: prev.col === col && prev.dir === "asc" ? "desc" : "asc" }));
+  const handleSort = (col, shiftKey) =>
+    setSortBy((prev) => {
+      if (shiftKey && prev.col !== "action" && prev.col !== col) {
+        if (prev.col2 === col) return { ...prev, dir2: prev.dir2 === "asc" ? "desc" : "asc" };
+        return { ...prev, col2: col, dir2: "asc" };
+      }
+      if (prev.col === col) return { ...prev, dir: prev.dir === "asc" ? "desc" : "asc" };
+      return { ...prev, col, dir: "asc" };
+    });
 
   const addOpp = async (o) => {
     const newOpp = normalizeOpp({ ...o, id: newId() });
     await supabase.from("opportunities").insert(oppToRow(newOpp, mode));
     setOpps([newOpp, ...opps]);
     setShowAdd(false);
+  };
+
+  const updateOpp = async (updated) => {
+    const norm = normalizeOpp(updated);
+    await supabase.from("opportunities").update(oppToRow(norm, mode)).eq("id", norm.id);
+    setOpps((prev) => prev.map((o) => (o.id === norm.id ? norm : o)));
+    setEditing(null);
   };
 
   const delOpp = async (id) => {
@@ -470,6 +497,33 @@ export default function App() {
     }
     setFinding(false);
     setFindStatus(null);
+  };
+
+  const checkLinks = async () => {
+    const links = opps
+      .filter((o) => o.sourceUrl)
+      .map((o) => ({ id: o.id, url: o.sourceUrl }));
+    if (!links.length) return;
+    setCheckingLinks(true);
+    setLinkStatus(null);
+    const fnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/check-links`;
+    try {
+      const res = await fetch(fnUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ links }),
+      });
+      const { results } = await res.json();
+      const map = {};
+      for (const r of results) map[r.id] = r;
+      setLinkStatus(map);
+    } catch (e) {
+      console.error("Link check failed:", e);
+    }
+    setCheckingLinks(false);
   };
 
   return (
@@ -555,6 +609,19 @@ export default function App() {
           <button onClick={resetSeed} style={btn(C.card, C.muted, true)}>
             <RotateCcw size={14} /> Reset
           </button>
+          <button onClick={checkLinks} disabled={checkingLinks} style={{ ...btn(C.card, checkingLinks ? C.muted : C.ink, true), opacity: checkingLinks ? 0.6 : 1 }}>
+            <Link2Off size={14} /> {checkingLinks ? "Checking…" : "Check Links"}
+          </button>
+          {linkStatus && (() => {
+            const vals = Object.values(linkStatus);
+            const broken = vals.filter((r) => r.ok === false).length;
+            const unknown = vals.filter((r) => r.ok === null).length;
+            return broken > 0
+              ? <span style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.red }}>{broken} broken{unknown > 0 ? `, ${unknown} timeout` : ""}</span>
+              : unknown > 0
+              ? <span style={{ ...ui, fontSize: 12, color: C.muted }}>{unknown} timed out</span>
+              : <span style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.green }}>All links OK</span>;
+          })()}
 
           {/* right-side CTAs */}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
@@ -571,6 +638,10 @@ export default function App() {
 
         {showCriteria && <Criteria params={params} setParams={setParams} mode={mode} />}
         {showFind && <FindPanel onFind={findListings} onClose={() => setShowFind(false)} finding={finding} status={findStatus} error={findErr} />}
+
+        {sortBy.col !== "action" && (
+          <SortStrip sortBy={sortBy} setSortBy={setSortBy} />
+        )}
 
         {/* ── PIPELINE TABLE ── */}
         <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, overflowX: "auto", background: C.card }}>
@@ -604,7 +675,9 @@ export default function App() {
             <Row key={s.o.id} s={s}
               expanded={expanded === s.o.id}
               onToggle={() => setExpanded(expanded === s.o.id ? null : s.o.id)}
-              onDelete={() => delOpp(s.o.id)} />
+              onDelete={() => delOpp(s.o.id)}
+              onEdit={() => setEditing(s.o.id)}
+              linkInfo={linkStatus?.[s.o.id] ?? null} />
           ))}
         </div>
 
@@ -637,6 +710,25 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {editing && (() => {
+        const editOpp = opps.find((o) => o.id === editing);
+        if (!editOpp) return null;
+        return (
+          <div
+            style={{
+              position: "fixed", inset: 0, background: "rgba(22,36,46,0.6)",
+              zIndex: 100, overflowY: "auto", padding: "32px 16px",
+              display: "flex", alignItems: "flex-start", justifyContent: "center",
+            }}
+            onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}
+          >
+            <div style={{ width: "100%", maxWidth: 700 }}>
+              <AddForm initial={editOpp} onSave={updateOpp} onClose={() => setEditing(null)} />
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -663,9 +755,11 @@ function Score({ v, conf }) {
 }
 
 /* ── pipeline row ── */
-function Row({ s, expanded, onToggle, onDelete }) {
+function Row({ s, expanded, onToggle, onDelete, onEdit, linkInfo }) {
   const { o, fin, cScore, eObj, rec, flags } = s;
   const tone = TONE_COLOR[rec.tone];
+  const linkBad = linkInfo?.ok === false;
+  const linkTimeout = linkInfo?.ok === null;
   return (
     <div style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
       {/* summary */}
@@ -675,13 +769,15 @@ function Row({ s, expanded, onToggle, onDelete }) {
         onMouseEnter={(e) => { e.currentTarget.style.background = C.lineSoft; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
       >
-        {/* name + city */}
+        {/* name */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <span style={{ color: C.muted, flexShrink: 0 }}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
           </span>
-          <div style={{ minWidth: 0 }}>
+          <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 5 }}>
             <div style={{ ...ui, fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.name}</div>
+            {linkBad && <Link2Off size={12} color={C.red} style={{ flexShrink: 0 }} title={`Dead link (HTTP ${linkInfo.status ?? "error"})`} />}
+            {linkTimeout && <Link2Off size={12} color={C.amber} style={{ flexShrink: 0 }} title="Link check timed out — may still be valid" />}
           </div>
         </div>
 
@@ -765,15 +861,33 @@ function Row({ s, expanded, onToggle, onDelete }) {
               </ul>
               <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 12 }}>
                 {o.sourceUrl && (
-                  <a href={o.sourceUrl} target="_blank" rel="noreferrer"
-                    style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.accent, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
-                    <ExternalLink size={13} /> View listing
-                  </a>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <a href={o.sourceUrl} target="_blank" rel="noreferrer"
+                      style={{ ...ui, fontSize: 12, fontWeight: 600, color: linkBad ? C.red : C.accent, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
+                      <ExternalLink size={13} /> View listing
+                    </a>
+                    {linkBad && (
+                      <span style={{ ...mono, fontSize: 10, color: C.red }}>
+                        HTTP {linkInfo.status ?? "error"} — listing may be gone
+                      </span>
+                    )}
+                    {linkTimeout && (
+                      <span style={{ ...mono, fontSize: 10, color: C.amber }}>
+                        Check timed out — verify manually
+                      </span>
+                    )}
+                  </div>
                 )}
-                <button onClick={onDelete}
-                  style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.red, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
-                  <Trash2 size={13} /> Remove
-                </button>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
+                  <button onClick={onEdit}
+                    style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.accent, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <Pencil size={13} /> Edit
+                  </button>
+                  <button onClick={onDelete}
+                    style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.red, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <Trash2 size={13} /> Remove
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -785,11 +899,16 @@ function Row({ s, expanded, onToggle, onDelete }) {
 
 /* ── sortable column header ── */
 function ColHd({ col, label, align, sortBy, onSort }) {
-  const active = sortBy.col === col;
-  const arrow = active ? (sortBy.dir === "asc" ? " ↑" : " ↓") : "";
+  const isPrimary = sortBy.col === col;
+  const isSecondary = sortBy.col2 === col;
+  const active = isPrimary || isSecondary;
+  const arrow = isPrimary ? (sortBy.dir === "asc" ? "↑" : "↓")
+              : isSecondary ? (sortBy.dir2 === "asc" ? "↑" : "↓") : "";
+  const showBadge = isPrimary && sortBy.col2;
   return (
     <div
-      onClick={() => onSort(col)}
+      onClick={(e) => onSort(col, e.shiftKey)}
+      title={!isPrimary && sortBy.col !== "action" ? "Shift-click to sort as secondary" : undefined}
       style={{
         textAlign: align, cursor: "pointer", userSelect: "none",
         color: active ? C.ink : C.muted,
@@ -798,8 +917,70 @@ function ColHd({ col, label, align, sortBy, onSort }) {
       }}
     >
       {label}
+      {showBadge && <span style={{ fontSize: 7.5, background: C.accent, color: "#fff", borderRadius: 3, padding: "1px 3px", marginLeft: 1, lineHeight: 1 }}>1</span>}
+      {isSecondary && <span style={{ fontSize: 7.5, background: C.muted, color: "#fff", borderRadius: 3, padding: "1px 3px", marginLeft: 1, lineHeight: 1 }}>2</span>}
       <span style={{ fontSize: 9, opacity: active ? 1 : 0, transition: "opacity 0.1s" }}>{arrow}</span>
       {!active && <span style={{ fontSize: 9, opacity: 0.25 }}>↕</span>}
+    </div>
+  );
+}
+
+const COL_LABELS = {
+  name: "Name", city: "City", date: "Added", asking: "Asking",
+  allin: "All-in", partner: "Partner $", concept: "Concept", econ: "Econ",
+};
+const SORTABLE_COLS = ["name", "city", "date", "asking", "allin", "partner", "concept", "econ"];
+
+function SortStrip({ sortBy, setSortBy }) {
+  const { col, dir, col2, dir2 } = sortBy;
+  const clearAll = () => setSortBy({ col: "action", dir: "asc", col2: null, dir2: "asc" });
+  const clearSecondary = () => setSortBy((s) => ({ ...s, col2: null, dir2: "asc" }));
+  const togglePrimary = () => setSortBy((s) => ({ ...s, dir: s.dir === "asc" ? "desc" : "asc" }));
+  const toggleSecondary = () => setSortBy((s) => ({ ...s, dir2: s.dir2 === "asc" ? "desc" : "asc" }));
+
+  const chipStyle = (color) => ({
+    ...ui, display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600,
+    padding: "4px 10px", borderRadius: 20, border: `1px solid ${color}22`,
+    background: `${color}12`, color, cursor: "pointer",
+  });
+  const xBtn = (onClick) => (
+    <button onClick={(e) => { e.stopPropagation(); onClick(); }}
+      style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", display: "flex", alignItems: "center", padding: 0, marginLeft: 2, opacity: 0.6, lineHeight: 1 }}>
+      ×
+    </button>
+  );
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+      <span style={{ ...mono, fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>Sort</span>
+
+      <button onClick={togglePrimary} style={chipStyle(C.accent)}>
+        {COL_LABELS[col]} {dir === "asc" ? "↑" : "↓"}
+        {xBtn(clearAll)}
+      </button>
+
+      {col2 ? (
+        <>
+          <span style={{ ...mono, fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.04em" }}>then</span>
+          <button onClick={toggleSecondary} style={chipStyle(C.muted)}>
+            {COL_LABELS[col2]} {dir2 === "asc" ? "↑" : "↓"}
+            {xBtn(clearSecondary)}
+          </button>
+        </>
+      ) : (
+        <select
+          value=""
+          onChange={(e) => e.target.value && setSortBy((s) => ({ ...s, col2: e.target.value, dir2: "asc" }))}
+          style={{ ...ui, fontSize: 12, border: `1px solid ${C.line}`, borderRadius: 20, padding: "4px 10px", background: "#fff", color: C.muted, cursor: "pointer", outline: "none" }}
+        >
+          <option value="">+ then by…</option>
+          {SORTABLE_COLS.filter((c) => c !== col).map((c) => (
+            <option key={c} value={c}>{COL_LABELS[c]}</option>
+          ))}
+        </select>
+      )}
+
+      <span style={{ ...mono, fontSize: 9.5, color: C.muted, opacity: 0.6 }}>shift-click column to add</span>
     </div>
   );
 }
@@ -889,8 +1070,25 @@ const BLANK = {
   conceptChange: "light", beachProximity: "unknown", kitchen: "true", sourceUrl: "", notes: "",
 };
 
-function AddForm({ onAdd, onClose }) {
-  const [f, setF] = useState(BLANK);
+function AddForm({ onAdd, onSave, onClose, initial }) {
+  const [f, setF] = useState(() => initial ? {
+    name: initial.name || "",
+    city: initial.city || "",
+    asking: initial.asking ?? "",
+    sqft: initial.sqft ?? "",
+    capacity: initial.capacity ?? "",
+    licenseType: initial.licenseType || "unknown",
+    rentMonthly: initial.rentMonthly ?? "",
+    leaseYears: initial.leaseYears ?? "",
+    sde: initial.sde ?? "",
+    revenue: initial.revenue ?? "",
+    sellerFinancing: String(initial.sellerFinancing === true),
+    conceptChange: initial.conceptChange || "light",
+    beachProximity: initial.beachProximity || "unknown",
+    kitchen: String(initial.kitchen !== false),
+    sourceUrl: initial.sourceUrl || "",
+    notes: initial.notes || "",
+  } : BLANK);
   const [blurb, setBlurb] = useState("");
   const [parsing, setParsing] = useState(false);
   const [perr, setPerr] = useState(null);
@@ -898,31 +1096,19 @@ function AddForm({ onAdd, onClose }) {
 
   const parse = async () => {
     if (!blurb.trim()) return;
-    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      setPerr("Set VITE_ANTHROPIC_API_KEY in your Railway environment variables.");
-      return;
-    }
     setParsing(true); setPerr(null);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/parse-listing`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
+          "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
         },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514", max_tokens: 1000,
-          messages: [{ role: "user", content:
-            `Extract structured data from this business-for-sale listing. Return ONLY valid JSON, no markdown, no prose. Keys: name (string), city (string), asking (number USD or null), sqft (number or null), capacity (number or null), licenseType ("47"|"48"|"unknown"), rentMonthly (number/mo or null), leaseYears (number or null), sde (number or null), revenue (number or null), sellerFinancing (true|false), conceptChange ("none"|"light"|"moderate"|"heavy"), beachProximity ("on"|"adjacent"|"inland"|"unknown"), kitchen (true|false), notes (short string).\n\nLISTING:\n${blurb}` }],
-        }),
+        body: JSON.stringify({ blurb }),
       });
       const data = await res.json();
-      const txt = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-      const clean = txt.replace(/```json/g, "").replace(/```/g, "").trim();
-      const j = JSON.parse(clean);
+      if (data.error) throw new Error(data.error);
+      const j = data.result;
       setF({
         name: j.name || "", city: j.city || "", asking: j.asking ?? "", sqft: j.sqft ?? "",
         capacity: j.capacity ?? "", licenseType: j.licenseType || "unknown",
@@ -932,15 +1118,16 @@ function AddForm({ onAdd, onClose }) {
         kitchen: String(j.kitchen ?? true), sourceUrl: "", notes: j.notes || "",
       });
     } catch (e) {
-      setPerr("Couldn't parse listing — check your API key or fill the fields in manually below.");
+      setPerr("Couldn't parse listing — try again or fill the fields in manually below.");
     }
     setParsing(false);
   };
 
   const submit = () => {
     if (!f.name.trim()) return;
-    onAdd({
+    const data = {
       ...f,
+      id: initial?.id,
       asking: f.asking === "" ? null : Number(f.asking),
       sqft: f.sqft === "" ? null : Number(f.sqft),
       capacity: f.capacity === "" ? null : Number(f.capacity),
@@ -950,14 +1137,16 @@ function AddForm({ onAdd, onClose }) {
       revenue: f.revenue === "" ? null : Number(f.revenue),
       sellerFinancing: f.sellerFinancing === "true",
       kitchen: f.kitchen === "true",
-    });
+    };
+    if (onSave) onSave(data);
+    else onAdd(data);
   };
 
   return (
     <div style={{ border: `1px solid ${C.line}`, borderRadius: 14, background: C.card, padding: "22px 22px 20px", boxShadow: "0 24px 64px rgba(22,36,46,0.28)" }}>
       {/* modal header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
-        <div style={{ ...display, fontSize: 20, fontWeight: 600 }}>Add Opportunity</div>
+        <div style={{ ...display, fontSize: 20, fontWeight: 600 }}>{initial ? "Edit Opportunity" : "Add Opportunity"}</div>
         <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, display: "flex", alignItems: "center" }}>
           <X size={20} />
         </button>
@@ -1014,7 +1203,7 @@ function AddForm({ onAdd, onClose }) {
       <div style={{ display: "flex", gap: 8, paddingTop: 16, borderTop: `1px solid ${C.line}` }}>
         <button onClick={submit} disabled={!f.name.trim()}
           style={{ ...btn(C.ink, C.paper), padding: "10px 22px", fontSize: 14, opacity: f.name.trim() ? 1 : 0.45 }}>
-          <Plus size={15} /> Add to pipeline
+          <Plus size={15} /> {initial ? "Save changes" : "Add to pipeline"}
         </button>
         <button onClick={onClose} style={btn(C.card, C.muted, true)}>Cancel</button>
       </div>
