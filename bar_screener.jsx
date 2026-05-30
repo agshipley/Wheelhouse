@@ -442,9 +442,10 @@ export default function App() {
         },
         body: JSON.stringify({ sourceUrl: opp.sourceUrl, name: opp.name }),
       });
-      const { result, error } = await res.json();
-      if (error) throw new Error(error);
-      const j = result;
+      const body = await res.json();
+      if (!res.ok || body.error) throw new Error(body.error || body.message || `Re-check failed (${res.status})`);
+      if (!body.result) throw new Error("Re-check returned no data — try again");
+      const j = body.result;
       const merged = normalizeOpp({
         ...opp,
         ...(j.name && { name: j.name }),
