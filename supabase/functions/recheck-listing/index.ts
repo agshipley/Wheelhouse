@@ -20,24 +20,20 @@ Deno.serve(async (req) => {
     });
   }
 
-  const prompt = `Find and extract all available data for this specific business-for-sale listing.
+  const searchPrompt = `Find this business-for-sale listing and describe all of its details in plain text.
 
 URL: ${sourceUrl}${name ? `\nBusiness name: ${name}` : ""}
 
-If the URL is a direct listing page, read it. If it is a search or category page, search for "${name}" on BizBuySell, BizQuest, or BizBen to find the specific individual listing page, then read that page.
+If the URL is a direct listing page, read it. If it is a search or category page, search for "${name}" on BizBuySell, BizQuest, or BizBen to find the specific listing page and read that.
 
-Return ONLY valid JSON (no markdown, no prose) with these exact keys:
-name (string), city (string), asking (number USD or null), sqft (number or null), capacity (number or null),
-licenseType ("47"|"48"|"unknown"), rentMonthly (number per month or null), leaseYears (number remaining or null),
-sde (number annual or null), revenue (number annual or null), sellerFinancing (true or false),
-conceptChange ("none"|"light"|"moderate"|"heavy"), beachProximity ("on"|"adjacent"|"inland"|"unknown"),
-kitchen (true or false or null), notes (key facts max 120 chars or null).
+Describe everything you find: asking price, monthly rent, lease term, SDE/net income/cash flow, annual revenue, square footage, capacity, ABC license type, seller financing availability, kitchen presence, location details, and any other relevant facts.`;
 
-Use null for any field not explicitly stated in the listing.`;
+  const EXTRACT_PROMPT = `Extract structured data from this business listing description. Return ONLY valid JSON, no markdown, no prose. Keys: name (string), city (string), asking (number USD or null), sqft (number or null), capacity (number or null), licenseType ("47"|"48"|"unknown"), rentMonthly (number/mo or null), leaseYears (number or null), sde (number or null), revenue (number or null), sellerFinancing (true|false), conceptChange ("none"|"light"|"moderate"|"heavy"), beachProximity ("on"|"adjacent"|"inland"|"unknown"), kitchen (true|false|null), notes (key facts max 120 chars or null). Use null for any field not stated.`;
 
   try {
-    const messages: unknown[] = [{ role: "user", content: prompt }];
-    let result = null;
+    // Step 1: web search — gather listing details as plain text
+    const messages: unknown[] = [{ role: "user", content: searchPrompt }];
+    let gatheredText = "";
 
     for (let turn = 0; turn < 8; turn++) {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -58,26 +54,15 @@ Use null for any field not explicitly stated in the listing.`;
 
       const data = await res.json();
       if (data.error) throw new Error(data.error.message);
-
       messages.push({ role: "assistant", content: data.content });
 
       if (data.stop_reason === "end_turn") {
-        const txt = (data.content as { type: string; text?: string }[])
+        gatheredText = (data.content as { type: string; text?: string }[])
           .filter((b) => b.type === "text")
           .map((b) => b.text)
           .join("\n");
-        const clean = txt.replace(/```json\n?/g, "").replace(/```/g, "").trim();
-        // Try direct parse, then fall back to finding the JSON object in the text
-        try {
-          result = JSON.parse(clean);
-        } catch {
-          const match = clean.match(/\{[\s\S]*\}/);
-          if (!match) throw new Error("No JSON object found in response");
-          result = JSON.parse(match[0]);
-        }
         break;
       }
-
       if (data.stop_reason === "tool_use") {
         const toolResults = (data.content as { type: string; id?: string }[])
           .filter((b) => b.type === "tool_use")
@@ -86,6 +71,36 @@ Use null for any field not explicitly stated in the listing.`;
       } else {
         break;
       }
+    }
+
+    if (!gatheredText) throw new Error("No data found for this listing");
+
+    // Step 2: single-turn extraction — convert gathered text to structured JSON
+    const extractRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": anthropicKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1000,
+        messages: [{ role: "user", content: `${EXTRACT_PROMPT}\n\nLISTING DESCRIPTION:\n${gatheredText}` }],
+      }),
+    });
+
+    const extractData = await extractRes.json();
+    if (extractData.error) throw new Error(extractData.error.message);
+
+    const txt = (extractData.content as { type: string; text?: string }[])
+      .filter((b) => b.type === "text").map((b) => b.text).join("\n");
+    const clean = txt.replace(/```json\n?/g, "").replace(/```/g, "").trim();
+    let result = null;
+    try { result = JSON.parse(clean); } catch {
+      const match = clean.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("Could not extract structured data from listing");
+      result = JSON.parse(match[0]);
     }
 
     if (!result) throw new Error("No structured data extracted from listing");
