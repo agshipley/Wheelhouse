@@ -57,16 +57,25 @@ function normaliseListing(input: Record<string, unknown>) {
   };
 }
 
-const SYSTEM_PROMPT = `You are a bar acquisition researcher. Search BizBuySell.com, BizQuest.com, BizBen.com, and LoopNet for bars and restaurants currently listed for sale.
+const SYSTEM_PROMPT = `You are a bar acquisition researcher. Your job is to find high-quality, complete listings for bars and restaurants currently for sale.
 
-For each listing you find, call the add_listing tool immediately. Use at most 5 web searches total, then stop — do not write a summary or explanation.
+PROCESS — follow this exactly:
+1. Search BizBuySell.com, BizQuest.com, BizBen.com, or LoopNet to find candidate listings.
+2. For each candidate, do a follow-up search to open the INDIVIDUAL listing page and read the full details.
+3. Only call add_listing after reading the individual listing page. Never call add_listing from a search results page snippet alone.
+
+HARD RULES — a listing that violates any of these must be skipped entirely:
+- asking price MUST be populated. If you cannot find the asking price on the individual listing page, skip it.
+- sourceUrl MUST be the direct permalink to the individual listing (e.g. bizbuysell.com/business-opportunity/some-name/1234567/). URLs containing /search/, ?q=, /businesses-for-sale/ without a specific listing ID, or any other search/category page are NOT acceptable. If you only have a search URL, do another search to find the direct listing URL. If you still cannot find it, skip the listing.
 
 Field guidance:
 - licenseType: California ABC "47" = full restaurant/bar license, "48" = bar-only (21+), "unknown" if not stated
 - conceptChange: "none" = buying turnkey as-is, "light" = minor rebrand/refresh, "moderate" = significant remodel or rebrand, "heavy" = full concept change required
 - beachProximity: "on" = within 2 blocks of ocean, "adjacent" = walkable (under 10 min), "inland" = not a beach area, "unknown" if unclear
 - sde: seller's discretionary earnings — the annual owner cash flow figure brokers use. Often labeled "Net Income", "Owner Benefit", or "Cash Flow"
-- sourceUrl: the DIRECT URL to this specific listing, not the site homepage`;
+- notes: pull the most useful facts from the listing (location highlights, lease terms, any financials mentioned), max 120 chars
+
+Do not write any summary or explanation. Stop when you have found the requested number of valid listings.`;
 
 const ADD_LISTING_TOOL = {
   name: "add_listing",
@@ -159,7 +168,7 @@ Deno.serve(async (req) => {
             model: "claude-sonnet-4-20250514",
             max_tokens: 4000,
             system: systemPrompt,
-            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }, ADD_LISTING_TOOL],
+            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: Math.min(count * 3 + 2, 20) }, ADD_LISTING_TOOL],
             messages,
           }),
         });
