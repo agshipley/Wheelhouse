@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import {
   Anchor, Plus, Trash2, ChevronDown, ChevronRight, Sparkles,
-  SlidersHorizontal, RotateCcw, ExternalLink, AlertCircle, X, Search, Link2Off, Pencil,
+  SlidersHorizontal, RotateCcw, ExternalLink, AlertCircle, X, Search, Link2Off, Pencil, RefreshCw,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 
@@ -294,6 +294,8 @@ export default function App() {
   const [linkStatus, setLinkStatus] = useState(null); // null = unchecked; map of id → { ok, status, error? }
   const [checkingLinks, setCheckingLinks] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [editingInitial, setEditingInitial] = useState(null);
+  const [rechecking, setRechecking] = useState(null);
 
   const params = paramsByMode[mode];
   const opps = oppsByMode[mode];
@@ -416,6 +418,46 @@ export default function App() {
     await supabase.from("opportunities").update(oppToRow(norm, mode)).eq("id", norm.id);
     setOpps((prev) => prev.map((o) => (o.id === norm.id ? norm : o)));
     setEditing(null);
+    setEditingInitial(null);
+  };
+
+  const recheck = async (opp) => {
+    setRechecking(opp.id);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/recheck-listing`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ sourceUrl: opp.sourceUrl, name: opp.name }),
+      });
+      const { result, error } = await res.json();
+      if (error) throw new Error(error);
+      const j = result;
+      setEditingInitial(normalizeOpp({
+        ...opp,
+        ...(j.name && { name: j.name }),
+        ...(j.city && { city: j.city }),
+        ...(j.asking != null && { asking: j.asking }),
+        ...(j.sqft != null && { sqft: j.sqft }),
+        ...(j.capacity != null && { capacity: j.capacity }),
+        ...(j.licenseType && j.licenseType !== "unknown" && { licenseType: j.licenseType }),
+        ...(j.rentMonthly != null && { rentMonthly: j.rentMonthly }),
+        ...(j.leaseYears != null && { leaseYears: j.leaseYears }),
+        ...(j.sde != null && { sde: j.sde }),
+        ...(j.revenue != null && { revenue: j.revenue }),
+        ...(j.sellerFinancing != null && { sellerFinancing: j.sellerFinancing }),
+        ...(j.conceptChange && { conceptChange: j.conceptChange }),
+        ...(j.beachProximity && j.beachProximity !== "unknown" && { beachProximity: j.beachProximity }),
+        ...(j.kitchen != null && { kitchen: j.kitchen }),
+        ...(j.notes && { notes: j.notes }),
+      }));
+    } catch (_e) {
+      setEditingInitial(null); // fall back to unmodified data
+    }
+    setEditing(opp.id);
+    setRechecking(null);
   };
 
   const delOpp = async (id) => {
@@ -528,7 +570,7 @@ export default function App() {
 
   return (
     <div style={{ ...ui, background: C.paper, color: C.ink, minHeight: "100vh" }}>
-      <style>{FONTS}</style>
+      <style>{FONTS + `@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
       {/* ── TOP NAV ── */}
       <header style={{ background: C.ink, position: "sticky", top: 0, zIndex: 50, boxShadow: "0 1px 0 rgba(255,255,255,0.07)" }}>
@@ -676,7 +718,9 @@ export default function App() {
               expanded={expanded === s.o.id}
               onToggle={() => setExpanded(expanded === s.o.id ? null : s.o.id)}
               onDelete={() => delOpp(s.o.id)}
-              onEdit={() => setEditing(s.o.id)}
+              onEdit={() => { setEditingInitial(null); setEditing(s.o.id); }}
+              onRecheck={() => recheck(s.o)}
+              isRechecking={rechecking === s.o.id}
               linkInfo={linkStatus?.[s.o.id] ?? null} />
           ))}
         </div>
@@ -712,7 +756,7 @@ export default function App() {
       )}
 
       {editing && (() => {
-        const editOpp = opps.find((o) => o.id === editing);
+        const editOpp = editingInitial ?? opps.find((o) => o.id === editing);
         if (!editOpp) return null;
         return (
           <div
@@ -721,10 +765,10 @@ export default function App() {
               zIndex: 100, overflowY: "auto", padding: "32px 16px",
               display: "flex", alignItems: "flex-start", justifyContent: "center",
             }}
-            onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}
+            onClick={(e) => { if (e.target === e.currentTarget) { setEditing(null); setEditingInitial(null); } }}
           >
             <div style={{ width: "100%", maxWidth: 700 }}>
-              <AddForm initial={editOpp} onSave={updateOpp} onClose={() => setEditing(null)} />
+              <AddForm initial={editOpp} onSave={updateOpp} onClose={() => { setEditing(null); setEditingInitial(null); }} />
             </div>
           </div>
         );
@@ -755,7 +799,7 @@ function Score({ v, conf }) {
 }
 
 /* ── pipeline row ── */
-function Row({ s, expanded, onToggle, onDelete, onEdit, linkInfo }) {
+function Row({ s, expanded, onToggle, onDelete, onEdit, onRecheck, isRechecking, linkInfo }) {
   const { o, fin, cScore, eObj, rec, flags } = s;
   const tone = TONE_COLOR[rec.tone];
   const linkBad = linkInfo?.ok === false;
@@ -879,6 +923,13 @@ function Row({ s, expanded, onToggle, onDelete, onEdit, linkInfo }) {
                   </div>
                 )}
                 <div style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
+                  {o.sourceUrl && (
+                    <button onClick={onRecheck} disabled={isRechecking}
+                      style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.muted, background: "none", border: "none", cursor: isRechecking ? "default" : "pointer", display: "inline-flex", alignItems: "center", gap: 4, opacity: isRechecking ? 0.6 : 1 }}>
+                      <RefreshCw size={13} style={isRechecking ? { animation: "spin 1s linear infinite" } : {}} />
+                      {isRechecking ? "Re-checking…" : "Re-check"}
+                    </button>
+                  )}
                   <button onClick={onEdit}
                     style={{ ...ui, fontSize: 12, fontWeight: 600, color: C.accent, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
                     <Pencil size={13} /> Edit
