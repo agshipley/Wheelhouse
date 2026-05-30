@@ -20,11 +20,13 @@ Deno.serve(async (req) => {
     });
   }
 
-  const prompt = `Search for this specific business-for-sale listing and extract all available data.
+  const prompt = `Find and extract all available data for this specific business-for-sale listing.
 
 URL: ${sourceUrl}${name ? `\nBusiness name: ${name}` : ""}
 
-Visit or search for this listing page and read every detail. Return ONLY valid JSON (no markdown, no prose) with these exact keys:
+If the URL is a direct listing page, read it. If it is a search or category page, search for "${name}" on BizBuySell, BizQuest, or BizBen to find the specific individual listing page, then read that page.
+
+Return ONLY valid JSON (no markdown, no prose) with these exact keys:
 name (string), city (string), asking (number USD or null), sqft (number or null), capacity (number or null),
 licenseType ("47"|"48"|"unknown"), rentMonthly (number per month or null), leaseYears (number remaining or null),
 sde (number annual or null), revenue (number annual or null), sellerFinancing (true or false),

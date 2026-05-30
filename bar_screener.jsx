@@ -1156,6 +1156,7 @@ function AddForm({ onAdd, onSave, onClose, initial }) {
   const parse = async () => {
     if (!blurb.trim()) return;
     setParsing(true); setPerr(null);
+    const isUrl = /^https?:\/\//i.test(blurb.trim());
     try {
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/parse-listing`, {
         method: "POST",
@@ -1163,7 +1164,7 @@ function AddForm({ onAdd, onSave, onClose, initial }) {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
         },
-        body: JSON.stringify({ blurb }),
+        body: JSON.stringify(isUrl ? { url: blurb.trim() } : { blurb }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -1216,10 +1217,10 @@ function AddForm({ onAdd, onSave, onClose, initial }) {
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <Sparkles size={14} color={C.accent} />
           <span style={{ ...ui, fontSize: 11.5, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: "0.06em" }}>AI Parse</span>
-          <span style={{ ...ui, fontSize: 12, color: C.muted, marginLeft: 4 }}>— paste a broker blurb to auto-fill the fields below</span>
+          <span style={{ ...ui, fontSize: 12, color: C.muted, marginLeft: 4 }}>— paste a listing URL or broker text to auto-fill the fields below</span>
         </div>
         <textarea value={blurb} onChange={(e) => setBlurb(e.target.value)} rows={3}
-          placeholder="Paste listing text here…"
+          placeholder="Paste a listing URL or broker text here…"
           style={{ ...ui, fontSize: 13, width: "100%", border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", outline: "none", resize: "vertical", background: "#fff", color: C.ink, boxSizing: "border-box", marginBottom: 10 }} />
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button onClick={parse} disabled={parsing || !blurb.trim()}
